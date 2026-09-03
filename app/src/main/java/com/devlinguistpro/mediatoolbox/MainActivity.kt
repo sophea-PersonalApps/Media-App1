@@ -33,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -104,8 +103,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    private fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun bindCamera() {
         val view = previewView ?: return
@@ -116,9 +114,7 @@ class MainActivity : ComponentActivity() {
                 cameraProvider = provider
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                 val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
-                val recorder = Recorder.Builder().setQualitySelector(
-                    QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))
-                ).build()
+                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))).build()
                 val video = VideoCapture.withOutput(recorder)
                 val selector = CameraSelector.Builder().requireLensFacing(currentLens).build()
                 provider.unbindAll()
@@ -245,10 +241,7 @@ private fun CameraScreen(
     val previous = modes.getOrNull(selectedIndex - 1)
     val next = modes.getOrNull(selectedIndex + 1)
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
-            modifier = Modifier.fillMaxSize()
-        )
+        AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
             CameraControls(mode, previous, next, onModeChanged, onCapture, onVideoToggle, onFlip, onOpenGallery)
@@ -319,12 +312,12 @@ private fun ControlButton(icon: @Composable () -> Unit, label: String, onClick: 
 @Composable
 private fun ShutterButton(mode: CameraMode, onPhoto: () -> Unit, onVideoToggle: () -> Unit) {
     val context = LocalContext.current
-    val enabled = mode == CameraMode.PHOTO || mode == CameraMode.VIDEO || mode == CameraMode.SCAN
+    val enabled = mode == CameraMode.PHOTO || mode == CameraMode.VIDEO || mode == CameraMode.SCAN || mode == CameraMode.QR
     val action = when (mode) {
         CameraMode.PHOTO -> onPhoto
         CameraMode.VIDEO -> onVideoToggle
         CameraMode.SCAN -> ({ context.startActivity(Intent(context, ScannerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
-        CameraMode.QR -> ({})
+        CameraMode.QR -> ({ context.startActivity(Intent(context, QrScannerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
     }
     Box(Modifier.size(72.dp).background(Color.White.copy(alpha = if (enabled) 1f else 0.45f), CircleShape).clickable(enabled = enabled, onClick = action).padding(5.dp).background(Color.Black, CircleShape), contentAlignment = Alignment.Center) {
         Box(Modifier.size(if (mode == CameraMode.VIDEO) 42.dp else 58.dp).background(Color.White, if (mode == CameraMode.VIDEO) RoundedCornerShape(10.dp) else CircleShape))
