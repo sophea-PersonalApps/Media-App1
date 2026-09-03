@@ -1,20 +1,18 @@
 package com.devlinguistpro.mediatoolbox
 
 import android.Manifest
-import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Bundle
-import android.provider.Settings
+import android.provider.DocumentsContract
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -44,34 +42,25 @@ import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -80,8 +69,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -97,55 +84,51 @@ class ScannerActivity : ComponentActivity() {
     private var previewView: PreviewView? = null
     private val pages = mutableStateListOf<String>()
     private var lensFacing = CameraSelector.LENS_FACING_BACK
+    private var showingPreview by mutableStateOf(false)
+    private var selectedFolderName by mutableStateOf("Choose folder when saving")
 
-    private val cameraPermission = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) bindCamera()
     }
 
-    private val folderPicker = registerForActivityResult(
-        ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            try {
-                contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                )
-            } catch (_: SecurityException) {
-                // Some providers do not offer persistable permissions; the current URI can still be used now.
-            }
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                .putString(KEY_FOLDER_URI, uri.toString())
-                .apply()
-        }
+    private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@registerForActivityResult
+        try {
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        } catch (_: SecurityException) { }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(KEY_FOLDER_URI, uri.toString()).apply()
+        selectedFolderName = folderName(uri)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
+        selectedFolderName = currentFolderName()
         setContent {
             MaterialTheme {
                 ScannerApp(
                     pages = pages,
                     hasCameraPermission = hasCameraPermission(),
+                    showingPreview = showingPreview,
+                    folderName = selectedFolderName,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     onPreviewReady = { previewView = it; if (hasCameraPermission()) bindCamera() },
                     onCapture = ::capturePage,
-                    onDeletePage = { index -> deletePage(index) },
-                    onFinish = { showPreviewScreen = true },
+                    onDeletePage = ::deletePage,
+                    onFinish = { if (pages.isNotEmpty()) showingPreview = true },
                     onBack = ::finish,
+                    onBackToScanner = { showingPreview = false },
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
-                    folderName = currentFolderName()
+                    onSave = ::savePdf
                 )
             }
         }
     }
-
-    private var showPreviewScreen by mutableStateOf(false)
 
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
@@ -167,6 +150,7 @@ class ScannerActivity : ComponentActivity() {
                 provider.bindToLifecycle(this, selector, preview, capture)
             } catch (_: Exception) {
                 imageCapture = null
+                runOnUiThread { Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show() }
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -174,76 +158,93 @@ class ScannerActivity : ComponentActivity() {
     private fun capturePage() {
         val capture = imageCapture ?: return
         val file = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
-        val output = ImageCapture.OutputFileOptions.Builder(file).build()
-        capture.takePicture(output, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                runOnUiThread {
-                    pages.add(file.absolutePath)
+        capture.takePicture(
+            ImageCapture.OutputFileOptions.Builder(file).build(),
+            cameraExecutor,
+            object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                    runOnUiThread { if (file.exists()) pages.add(file.absolutePath) }
+                }
+                override fun onError(exception: ImageCaptureException) {
+                    file.delete()
+                    runOnUiThread { Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() }
                 }
             }
-
-            override fun onError(exception: ImageCaptureException) {
-                runOnUiThread {
-                    Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
-                }
-                file.delete()
-            }
-        })
+        )
     }
 
     private fun deletePage(index: Int) {
-        if (index !in pages.indices) return
-        File(pages.removeAt(index)).delete()
+        if (index in pages.indices) File(pages.removeAt(index)).delete()
+        if (pages.isEmpty()) showingPreview = false
     }
 
     private fun flipCamera() {
-        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-            CameraSelector.LENS_FACING_FRONT
-        } else CameraSelector.LENS_FACING_BACK
+        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         bindCamera()
     }
 
-    private fun currentFolderName(): String {
-        val uri = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)
-        return uri?.let { Uri.parse(it).lastPathSegment?.substringAfterLast(':')?.replace('%20', ' ') }
-            ?.takeIf { it.isNotBlank() } ?: "Choose folder when saving"
-    }
+    private fun currentFolderName(): String =
+        getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)?.let(Uri::parse)?.let(::folderName)
+            ?: "Choose folder when saving"
 
-    fun savePdf() {
-        val folderString = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)
-        if (folderString == null) {
+    private fun folderName(uri: Uri): String =
+        DocumentsContract.getTreeDocumentId(uri)?.substringAfterLast(':')?.replace('%20', ' ')
+            ?.takeIf { it.isNotBlank() } ?: "Chosen folder"
+
+    private fun savePdf() {
+        val folder = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)?.let(Uri::parse)
+        if (folder == null) {
             Toast.makeText(this, "Choose a folder first", Toast.LENGTH_SHORT).show()
             folderPicker.launch(null)
             return
         }
-        val folder = Uri.parse(folderString)
+        val pagePaths = pages.toList()
+        if (pagePaths.isEmpty()) return
+
         Thread {
             var outputUri: Uri? = null
+            var document: PdfDocument? = null
             try {
-                val pdf = createPdf(this, pages.toList())
+                document = createPdf(pagePaths)
                 val name = "Scan_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.pdf"
-                val values = android.content.ContentValues().apply {
-                    put(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME, name)
-                    put(android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE, "application/pdf")
-                }
-                outputUri = contentResolver.insert(folder, values)
-                if (outputUri == null) throw IOException("Could not create PDF")
-                contentResolver.openOutputStream(outputUri, "w")?.use { out ->
-                    pdf.writeTo(out)
-                } ?: throw IOException("Could not open PDF")
-                pdf.close()
+                outputUri = DocumentsContract.createDocument(contentResolver, folder, "application/pdf", name)
+                    ?: throw IOException("Could not create PDF in selected folder")
+                contentResolver.openOutputStream(outputUri, "w")?.use { document.writeTo(it) }
+                    ?: throw IOException("Could not open PDF")
                 runOnUiThread {
                     Toast.makeText(this, "PDF saved", Toast.LENGTH_SHORT).show()
                     clearPages()
                     finish()
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 outputUri?.let { contentResolver.delete(it, null, null) }
-                runOnUiThread {
-                    Toast.makeText(this, "Could not save PDF", Toast.LENGTH_LONG).show()
-                }
+                runOnUiThread { Toast.makeText(this, "Could not save PDF", Toast.LENGTH_LONG).show() }
+            } finally {
+                document?.close()
             }
         }.start()
+    }
+
+    private fun createPdf(paths: List<String>): PdfDocument {
+        val document = PdfDocument()
+        try {
+            paths.forEachIndexed { index, path ->
+                val bitmap = BitmapFactory.decodeFile(path) ?: throw IOException("Unable to read scan page")
+                val maxSide = 2200
+                val scale = minOf(1f, maxSide.toFloat() / maxOf(bitmap.width, bitmap.height).toFloat())
+                val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+                val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+                val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
+                page.canvas.drawColor(Color.WHITE)
+                page.canvas.drawBitmap(bitmap, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                document.finishPage(page)
+                bitmap.recycle()
+            }
+            return document
+        } catch (e: Exception) {
+            document.close()
+            throw e
+        }
     }
 
     private fun clearPages() {
@@ -268,40 +269,24 @@ class ScannerActivity : ComponentActivity() {
 private fun ScannerApp(
     pages: List<String>,
     hasCameraPermission: Boolean,
+    showingPreview: Boolean,
+    folderName: String,
     onRequestPermission: () -> Unit,
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onDeletePage: (Int) -> Unit,
     onFinish: () -> Unit,
     onBack: () -> Unit,
+    onBackToScanner: () -> Unit,
     onFlip: () -> Unit,
     onChooseFolder: () -> Unit,
-    folderName: String
+    onSave: () -> Unit
 ) {
-    var preview by rememberSaveable { mutableStateOf(false) }
-
     Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Black) {
-        if (!hasCameraPermission) {
-            ScannerPermission(onRequestPermission, onBack)
-        } else if (preview) {
-            ScannerPreview(
-                pages = pages,
-                onBack = { preview = false },
-                onDelete = onDeletePage,
-                onChooseFolder = onChooseFolder,
-                folderName = folderName,
-                onSave = { (LocalContext.current as ScannerActivity).savePdf() }
-            )
-        } else {
-            ScannerCapture(
-                pages = pages,
-                onPreviewReady = onPreviewReady,
-                onCapture = onCapture,
-                onDelete = onDeletePage,
-                onFinish = { if (pages.isNotEmpty()) preview = true },
-                onBack = onBack,
-                onFlip = onFlip
-            )
+        when {
+            !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack)
+            showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave)
+            else -> ScannerCapture(pages, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip)
         }
     }
 }
@@ -349,10 +334,9 @@ private fun ScannerCapture(
             Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = androidx.compose.ui.graphics.Color.White) }
                 Text("Scanner", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
-                IconButton(onClick = onFlip) { Icon(Icons.Default.Refresh, "Flip camera", tint = androidx.compose.ui.graphics.Color.White) }
+                IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = androidx.compose.ui.graphics.Color.White) }
             }
-
-            Column(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.78f)).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.82f)).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (pages.isNotEmpty()) {
                     LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         itemsIndexed(pages) { index, path ->
@@ -368,10 +352,7 @@ private fun ScannerCapture(
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(end = 18.dp))
-                    Box(
-                        Modifier.size(72.dp).background(androidx.compose.ui.graphics.Color.White, CircleShape).padding(5.dp).clickable(onClick = onCapture),
-                        contentAlignment = Alignment.Center
-                    ) {
+                    Box(Modifier.size(72.dp).background(androidx.compose.ui.graphics.Color.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) {
                         Box(Modifier.size(58.dp).background(androidx.compose.ui.graphics.Color.Black, CircleShape))
                     }
                     Spacer(Modifier.size(18.dp))
@@ -387,8 +368,8 @@ private fun ScannerPreview(
     pages: List<String>,
     onBack: () -> Unit,
     onDelete: (Int) -> Unit,
-    onChooseFolder: () -> Unit,
     folderName: String,
+    onChooseFolder: () -> Unit,
     onSave: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
@@ -430,35 +411,8 @@ private fun ScannerPreview(
 
 @Composable
 private fun LocalImage(path: String, modifier: Modifier) {
-    val bitmap by remember(path) { mutableStateOf(decodePreview(path)) }
-    bitmap?.let {
-        Image(it.asImageBitmap(), "Scanned page", modifier, contentScale = ContentScale.Fit)
-    }
+    val bitmap = androidx.compose.runtime.remember(path) { decodePreview(path) }
+    bitmap?.let { Image(it.asImageBitmap(), "Scanned page", modifier, contentScale = ContentScale.Fit) }
 }
 
-private fun decodePreview(path: String): Bitmap? = try {
-    BitmapFactory.decodeFile(path)
-} catch (_: Exception) { null }
-
-private fun createPdf(context: Context, paths: List<String>): PdfDocument {
-    val document = PdfDocument()
-    try {
-        paths.forEachIndexed { index, path ->
-            val bitmap = BitmapFactory.decodeFile(path) ?: throw IOException("Unable to read scan page")
-            val maxSide = 2200
-            val scale = minOf(1f, maxSide.toFloat() / maxOf(bitmap.width, bitmap.height).toFloat())
-            val pageWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
-            val pageHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
-            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, index + 1).create()
-            val page = document.startPage(pageInfo)
-            val dst = RectF(0f, 0f, pageWidth.toFloat(), pageHeight.toFloat())
-            page.canvas.drawBitmap(bitmap, null, dst, Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
-            document.finishPage(page)
-            bitmap.recycle()
-        }
-        return document
-    } catch (e: Exception) {
-        document.close()
-        throw e
-    }
-}
+private fun decodePreview(path: String): Bitmap? = try { BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
