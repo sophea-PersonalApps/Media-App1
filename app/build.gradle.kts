@@ -12,8 +12,8 @@ android {
         applicationId = "com.devlinguistpro.mediatoolbox"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5"
+        versionCode = 6
+        versionName = "0.6"
     }
 
     buildTypes {
@@ -53,4 +53,5 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.camera:camera-video:$cameraxVersion")
+    implementation("com.google.mlkit:barcode-scanning:17.3.0")
 }
