@@ -13,15 +13,10 @@
         android:label="Media Toolbox"
         android:supportsRtl="true"
         android:theme="@style/Theme.MediaToolbox">
-        <activity
-            android:name=".GalleryEditorActivity"
-            android:exported="false" />
-        <activity
-            android:name=".GalleryActivity"
-            android:exported="false" />
-        <activity
-            android:name=".MainActivity"
-            android:exported="true">
+        <activity android:name=".GalleryEditorActivity" android:exported="false" />
+        <activity android:name=".GalleryActivity" android:exported="false" />
+        <activity android:name=".ScannerActivity" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
