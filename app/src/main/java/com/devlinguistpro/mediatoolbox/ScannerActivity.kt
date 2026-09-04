@@ -149,33 +149,101 @@ class ScannerActivity : ComponentActivity() {
 }
 
 @Composable private fun ScannerApp(pages: List<String>, hasCameraPermission: Boolean, showingPreview: Boolean, folderName: String, onRequestPermission: () -> Unit, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onDeletePage: (Int) -> Unit, onFinish: () -> Unit, onBack: () -> Unit, onBackToScanner: () -> Unit, onFlip: () -> Unit, onChooseFolder: () -> Unit, onSave: () -> Unit) {
-    Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Black) { when { !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack); showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave); else -> ScannerCapture(pages, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip) } }
-}
-@Composable private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
-    Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().navigationBarsPadding().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text("Camera access is needed", color = androidx.compose.ui.graphics.Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); Text("The scanner uses the camera to capture pages. No camera image is uploaded.", color = androidx.compose.ui.graphics.Color.LightGray); Spacer(Modifier.height(20.dp)); Button(onClick = onRequest) { Text("Allow camera") }; Spacer(Modifier.height(8.dp)); Button(onClick = onBack) { Text("Back") }
+    Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Black) {
+        when {
+            !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack)
+            showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave)
+            else -> ScannerCapture(pages, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip)
+        }
     }
 }
+
+@Composable private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
+    Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().navigationBarsPadding().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text("Camera access is needed", color = androidx.compose.ui.graphics.Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(12.dp))
+        Text("The scanner uses the camera to capture pages. No camera image is uploaded.", color = androidx.compose.ui.graphics.Color.LightGray)
+        Spacer(Modifier.height(20.dp))
+        Button(onClick = onRequest) { Text("Allow camera") }
+        Spacer(Modifier.height(8.dp))
+        Button(onClick = onBack) { Text("Back") }
+    }
+}
+
 @Composable private fun ScannerCapture(pages: List<String>, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onDelete: (Int) -> Unit, onFinish: () -> Unit, onBack: () -> Unit, onFlip: () -> Unit) {
     val context = LocalContext.current
     Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
         AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = androidx.compose.ui.graphics.Color.White) }; Text("Scanner", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp)); IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = androidx.compose.ui.graphics.Color.White) } }
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = androidx.compose.ui.graphics.Color.White) }
+                Text("Scanner", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
+                IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = androidx.compose.ui.graphics.Color.White) }
+            }
             Column(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (pages.isNotEmpty()) { LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) { itemsIndexed(pages) { index, path -> Box(Modifier.size(68.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) { Icon(Icons.Default.Delete, "Remove page", tint = androidx.compose.ui.graphics.Color.White) } } }; Spacer(Modifier.height(8.dp)) }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) { Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(end = 18.dp)); Box(Modifier.size(72.dp).background(androidx.compose.ui.graphics.Color.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) { Box(Modifier.size(58.dp).background(androidx.compose.ui.graphics.Color.Black, CircleShape)) }; Spacer(Modifier.size(18.dp)); Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") } }
+                if (pages.isNotEmpty()) {
+                    LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        itemsIndexed(pages) { index, path ->
+                            Box(Modifier.size(68.dp)) {
+                                LocalImage(path, Modifier.fillMaxSize())
+                                IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) {
+                                    Icon(Icons.Default.Delete, "Remove page", tint = androidx.compose.ui.graphics.Color.White)
+                                }
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = androidx.compose.ui.graphics.Color.White, modifier = Modifier.padding(end = 18.dp))
+                    Box(Modifier.size(72.dp).background(androidx.compose.ui.graphics.Color.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(58.dp).background(androidx.compose.ui.graphics.Color.Black, CircleShape))
+                    }
+                    Spacer(Modifier.size(18.dp))
+                    Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
+                }
             }
         }
     }
 }
+
 @Composable private fun ScannerPreview(pages: List<String>, onBack: () -> Unit, onDelete: (Int) -> Unit, folderName: String, onChooseFolder: () -> Unit, onSave: () -> Unit) {
     Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = androidx.compose.ui.graphics.Color.White) }; Text("Preview", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = androidx.compose.ui.graphics.Color.LightGray) }
-        LazyRow(Modifier.fillMaxWidth().height(94.dp).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { itemsIndexed(pages) { index, path -> Box(Modifier.size(86.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(27.dp)) { Icon(Icons.Default.Delete, "Delete page", tint = androidx.compose.ui.graphics.Color.White) } } } }
-        Spacer(Modifier.height(10.dp)); Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { if (pages.isNotEmpty()) LocalImage(pages[0], Modifier.fillMaxWidth().aspectRatio(0.72f)) }
-        Column(Modifier.fillMaxWidth().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) { Icon(Icons.Default.Folder, "PDF folder", tint = androidx.compose.ui.graphics.Color.White); Spacer(Modifier.size(8.dp)); Text(folderName, color = androidx.compose.ui.graphics.Color.White, maxLines = 1, modifier = Modifier.weight(1f)); Button(onClick = onChooseFolder) { Text("Choose") } }; Spacer(Modifier.height(10.dp)); Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) { Icon(Icons.Default.PictureAsPdf, "Save PDF"); Spacer(Modifier.size(8.dp)); Text("Save PDF") } }
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = androidx.compose.ui.graphics.Color.White) }
+            Text("Preview", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = androidx.compose.ui.graphics.Color.LightGray)
+        }
+        LazyRow(Modifier.fillMaxWidth().height(94.dp).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            itemsIndexed(pages) { index, path ->
+                Box(Modifier.size(86.dp)) {
+                    LocalImage(path, Modifier.fillMaxSize())
+                    IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(27.dp)) { Icon(Icons.Default.Delete, "Delete page", tint = androidx.compose.ui.graphics.Color.White) }
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) { if (pages.isNotEmpty()) LocalImage(pages[0], Modifier.fillMaxWidth().aspectRatio(0.72f)) }
+        Column(Modifier.fillMaxWidth().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                Icon(Icons.Default.Folder, "PDF folder", tint = androidx.compose.ui.graphics.Color.White)
+                Spacer(Modifier.size(8.dp))
+                Text(folderName, color = androidx.compose.ui.graphics.Color.White, maxLines = 1, modifier = Modifier.weight(1f))
+                Button(onClick = onChooseFolder) { Text("Choose") }
+            }
+            Spacer(Modifier.height(10.dp))
+            Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) {
+                Icon(Icons.Default.PictureAsPdf, "Save PDF")
+                Spacer(Modifier.size(8.dp))
+                Text("Save PDF")
+            }
+        }
     }
 }
-@Composable private fun LocalImage(path: String, modifier: Modifier) { val bitmap = androidx.compose.runtime.remember(path) { decodePreview(path) }; bitmap?.let { Image(it.asImageBitmap(), "Scanned page", modifier, contentScale = ContentScale.Fit) } }
+
+@Composable private fun LocalImage(path: String, modifier: Modifier) {
+    val bitmap = androidx.compose.runtime.remember(path) { decodePreview(path) }
+    bitmap?.let { Image(it.asImageBitmap(), "Scanned page", modifier, contentScale = ContentScale.Fit) }
+}
+
 private fun decodePreview(path: String): Bitmap? = try { BitmapFactory.decodeFile(path) } catch (_: Exception) { null }
