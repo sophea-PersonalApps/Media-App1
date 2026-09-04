@@ -33,14 +33,12 @@ object MediaToolboxPrefs {
     const val PREFS = "media_toolbox_settings"
     const val KEY_SCANNER_FOLDER = "scanner_pdf_folder"
     const val KEY_KEEP_SCREEN_ON = "keep_screen_on"
-    const val KEY_GALLERY_SORT_NEWEST = "gallery_sort_newest"
     const val DEFAULT_SCANNER_FOLDER = "Choose a folder when saving"
 }
 
 class SettingsActivity : ComponentActivity() {
     private var scannerFolderName by mutableStateOf(MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER)
     private var keepScreenOn by mutableStateOf(true)
-    private var gallerySortNewest by mutableStateOf(true)
     private var aboutOpen by mutableStateOf(false)
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -63,9 +61,14 @@ class SettingsActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 SettingsScreen(
-                    scannerFolderName, keepScreenOn, gallerySortNewest, aboutOpen,
-                    ::finish, { folderPicker.launch(null) }, ::setKeepScreenOn,
-                    ::setGallerySortNewest, { aboutOpen = true }, { aboutOpen = false }
+                    scannerFolderName = scannerFolderName,
+                    keepScreenOn = keepScreenOn,
+                    aboutOpen = aboutOpen,
+                    onBack = ::finish,
+                    onChooseScannerFolder = { folderPicker.launch(null) },
+                    onKeepScreenOnChanged = ::setKeepScreenOn,
+                    onAbout = { aboutOpen = true },
+                    onDismissAbout = { aboutOpen = false }
                 )
             }
         }
@@ -74,7 +77,6 @@ class SettingsActivity : ComponentActivity() {
     private fun loadSettings() {
         val prefs = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
         keepScreenOn = prefs.getBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, true)
-        gallerySortNewest = prefs.getBoolean(MediaToolboxPrefs.KEY_GALLERY_SORT_NEWEST, true)
         scannerFolderName = prefs.getString(MediaToolboxPrefs.KEY_SCANNER_FOLDER, null)
             ?.let(Uri::parse)?.let(::folderName) ?: MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER
     }
@@ -83,12 +85,6 @@ class SettingsActivity : ComponentActivity() {
         keepScreenOn = value
         getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE).edit()
             .putBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, value).apply()
-    }
-
-    private fun setGallerySortNewest(value: Boolean) {
-        gallerySortNewest = value
-        getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE).edit()
-            .putBoolean(MediaToolboxPrefs.KEY_GALLERY_SORT_NEWEST, value).apply()
     }
 
     private fun folderName(uri: Uri): String = try {
@@ -101,12 +97,10 @@ class SettingsActivity : ComponentActivity() {
 private fun SettingsScreen(
     scannerFolderName: String,
     keepScreenOn: Boolean,
-    gallerySortNewest: Boolean,
     aboutOpen: Boolean,
     onBack: () -> Unit,
     onChooseScannerFolder: () -> Unit,
     onKeepScreenOnChanged: (Boolean) -> Unit,
-    onGallerySortChanged: (Boolean) -> Unit,
     onAbout: () -> Unit,
     onDismissAbout: () -> Unit
 ) {
@@ -118,10 +112,7 @@ private fun SettingsScreen(
             }
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
                 SettingsSection("Camera", Icons.Default.CameraAlt)
-                SettingsSwitchRow("Keep screen on", "Prevent the display from sleeping while using camera or scanner", keepScreenOn, onKeepScreenOnChanged)
-                Spacer(Modifier.height(20.dp))
-                SettingsSection("Gallery", Icons.Default.CameraAlt)
-                SettingsSwitchRow("Newest media first", "Show the newest photos and videos at the beginning", gallerySortNewest, onGallerySortChanged)
+                SettingsSwitchRow("Keep screen on", "Prevent the display from sleeping while using the camera or scanner", keepScreenOn, onKeepScreenOnChanged)
                 Spacer(Modifier.height(20.dp))
                 SettingsSection("Scanner", Icons.Default.Scanner)
                 FolderSettingRow("PDF save folder", scannerFolderName, onChooseScannerFolder)
