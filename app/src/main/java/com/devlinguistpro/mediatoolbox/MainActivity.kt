@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,10 +32,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FlashAuto
+import androidx.compose.material.icons.filled.FlashOff
+import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -57,9 +63,9 @@ import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-private enum class CameraMode(val label: String) {
-    PHOTO("CAMERA"), VIDEO("VIDEO"), SCAN("SCAN"), QR("QR")
-}
+private enum class CameraMode(val label: String) { PHOTO("CAMERA"), VIDEO("VIDEO"), SCAN("SCAN"), QR("QR") }
+
+private enum class FlashSetting(val label: String) { OFF("Off"), AUTO("Auto"), ON("On") }
 
 class MainActivity : ComponentActivity() {
     private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
@@ -69,7 +75,8 @@ class MainActivity : ComponentActivity() {
     private var activeRecording: Recording? = null
     private var currentLens = CameraSelector.LENS_FACING_BACK
     private var previewView: PreviewView? = null
-    private var cameraPermissionGranted = false
+    private var cameraPermissionGranted by mutableStateOf(false)
+    private var flashSetting by mutableStateOf(FlashSetting.OFF)
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
@@ -84,12 +91,14 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 MediaToolboxApp(
                     hasCameraPermission = cameraPermissionGranted,
+                    flashSetting = flashSetting,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     onPreviewReady = { view -> previewView = view; if (cameraPermissionGranted) bindCamera() },
                     onCapture = ::capturePhoto,
                     onVideoToggle = ::toggleVideoRecording,
                     onFlip = ::flipCamera,
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) }
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
+                    onCycleFlash = ::cycleFlash
                 )
             }
         }
@@ -97,24 +106,34 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (hasCameraPermission()) {
-            cameraPermissionGranted = true
-            if (previewView != null) bindCamera()
-        }
+        val granted = hasCameraPermission()
+        if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
+        if (granted && previewView != null) bindCamera()
     }
 
-    private fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun bindCamera() {
         val view = previewView ?: return
+        if (!hasCameraPermission()) return
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
                 val provider = future.get()
                 cameraProvider = provider
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
-                val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build()
-                val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))).build()
+                val capture = ImageCapture.Builder()
+                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    .setFlashMode(when (flashSetting) {
+                        FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
+                        FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
+                        FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
+                    })
+                    .build()
+                val recorder = Recorder.Builder().setQualitySelector(
+                    QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))
+                ).build()
                 val video = VideoCapture.withOutput(recorder)
                 val selector = CameraSelector.Builder().requireLensFacing(currentLens).build()
                 provider.unbindAll()
@@ -124,8 +143,19 @@ class MainActivity : ComponentActivity() {
             } catch (_: Exception) {
                 imageCapture = null
                 videoCapture = null
+                runOnUiThread { Toast.makeText(this, "Camera could not start", Toast.LENGTH_SHORT).show() }
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun cycleFlash() {
+        if (activeRecording != null) return
+        flashSetting = when (flashSetting) {
+            FlashSetting.OFF -> FlashSetting.AUTO
+            FlashSetting.AUTO -> FlashSetting.ON
+            FlashSetting.ON -> FlashSetting.OFF
+        }
+        bindCamera()
     }
 
     private fun flipCamera() {
@@ -198,17 +228,23 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MediaToolboxApp(
     hasCameraPermission: Boolean,
+    flashSetting: FlashSetting,
     onRequestPermission: () -> Unit,
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
     onFlip: () -> Unit,
-    onOpenGallery: () -> Unit
+    onOpenGallery: () -> Unit,
+    onCycleFlash: () -> Unit
 ) {
     var mode by rememberSaveable { mutableStateOf(CameraMode.PHOTO) }
+    var moreOpen by rememberSaveable { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
         if (!hasCameraPermission) PermissionScreen(onRequestPermission)
-        else CameraScreen(mode, { mode = it }, onPreviewReady, onCapture, onVideoToggle, onFlip, onOpenGallery)
+        else CameraScreen(
+            mode, { mode = it }, onPreviewReady, onCapture, onVideoToggle, onFlip,
+            onOpenGallery, flashSetting, onCycleFlash, moreOpen, { moreOpen = it }
+        )
     }
 }
 
@@ -233,19 +269,36 @@ private fun CameraScreen(
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
     onFlip: () -> Unit,
-    onOpenGallery: () -> Unit
+    onOpenGallery: () -> Unit,
+    flashSetting: FlashSetting,
+    onCycleFlash: () -> Unit,
+    moreOpen: Boolean,
+    setMoreOpen: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val modes = CameraMode.entries
     val selectedIndex = modes.indexOf(mode)
-    val previous = modes.getOrNull(selectedIndex - 1)
-    val next = modes.getOrNull(selectedIndex + 1)
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
+        AndroidView(
+            factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
+            modifier = Modifier.fillMaxSize()
+        )
+        Box(
+            Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
+                var drag = 0f
+                detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
+                    when {
+                        drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1])
+                        drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1])
+                    }
+                    drag = 0f
+                })
+            }
+        )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
-            CameraControls(mode, previous, next, onModeChanged, onCapture, onVideoToggle, onFlip, onOpenGallery)
-            BottomNavigation({}, onOpenGallery)
+            CameraControls(mode, selectedIndex, modes, onModeChanged, onCapture, onVideoToggle, onFlip, flashSetting, onCycleFlash, moreOpen, setMoreOpen)
+            BottomNavigation(onCamera = { onModeChanged(CameraMode.PHOTO) }, onGallery = onOpenGallery, cameraSelected = mode == CameraMode.PHOTO)
         }
     }
 }
@@ -253,46 +306,66 @@ private fun CameraScreen(
 @Composable
 private fun CameraControls(
     mode: CameraMode,
-    previous: CameraMode?,
-    next: CameraMode?,
+    selectedIndex: Int,
+    modes: List<CameraMode>,
     onModeChanged: (CameraMode) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
     onFlip: () -> Unit,
-    onOpenGallery: () -> Unit
+    flashSetting: FlashSetting,
+    onCycleFlash: () -> Unit,
+    moreOpen: Boolean,
+    setMoreOpen: (Boolean) -> Unit
 ) {
-    Column(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.82f)).padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            ControlButton({ Icon(Icons.Default.MoreVert, "More", tint = Color.White) }, "MORE")
-            ShutterButton(mode, onCapture, onVideoToggle)
-            ControlButton({ Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }, "FLIP", onFlip)
+    BoxWithConstraints(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.82f))) {
+        val sidePadding = when {
+            maxWidth < 340.dp -> 8.dp
+            maxWidth < 400.dp -> 16.dp
+            else -> 22.dp
         }
-        Spacer(Modifier.height(8.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            if (previous != null) ModeItem(previous, false) { onModeChanged(previous) }
-            Spacer(Modifier.width(24.dp))
-            ModeItem(mode, true) { }
-            Spacer(Modifier.width(24.dp))
-            if (next != null) ModeItem(next, false) { onModeChanged(next) }
-        }
-        ModeSwipeArea(mode, onModeChanged)
-    }
-}
-
-@Composable
-private fun ModeSwipeArea(mode: CameraMode, onModeChanged: (CameraMode) -> Unit) {
-    val modes = CameraMode.entries
-    val index = modes.indexOf(mode)
-    Box(Modifier.fillMaxWidth().height(1.dp).pointerInput(mode) {
-        var drag = 0f
-        detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
-            when {
-                drag < -80f && index < modes.lastIndex -> onModeChanged(modes[index + 1])
-                drag > 80f && index > 0 -> onModeChanged(modes[index - 1])
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = sidePadding), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                ControlButton({ Icon(Icons.Default.MoreVert, "More", tint = Color.White) }, "MORE") { setMoreOpen(true) }
+                ShutterButton(mode, onCapture, onVideoToggle)
+                ControlButton({ Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }, "FLIP", onFlip)
             }
-            drag = 0f
-        })
-    })
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = sidePadding), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                val previous = modes.getOrNull(selectedIndex - 1)
+                val next = modes.getOrNull(selectedIndex + 1)
+                if (previous != null) ModeItem(previous, false) { onModeChanged(previous) }
+                Spacer(Modifier.width(18.dp))
+                ModeItem(modes[selectedIndex], true) { }
+                Spacer(Modifier.width(18.dp))
+                if (next != null) ModeItem(next, false) { onModeChanged(next) }
+            }
+        }
+    }
+    if (moreOpen) {
+        AlertDialog(
+            onDismissRequest = { setMoreOpen(false) },
+            title = { Text("More camera options") },
+            text = {
+                Column {
+                    Text("Flash: ${flashSetting.label}")
+                    Spacer(Modifier.height(8.dp))
+                    Button(onClick = { onCycleFlash(); setMoreOpen(false) }) {
+                        val icon = when (flashSetting) {
+                            FlashSetting.OFF -> Icons.Default.FlashOff
+                            FlashSetting.AUTO -> Icons.Default.FlashAuto
+                            FlashSetting.ON -> Icons.Default.FlashOn
+                        }
+                        Icon(icon, "Flash")
+                        Spacer(Modifier.size(6.dp))
+                        Text("Change flash")
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("HDR is not forced because support varies by device; the camera uses the device's normal capture pipeline.", color = Color.Gray, fontSize = 12.sp)
+                }
+            },
+            confirmButton = { Button(onClick = { setMoreOpen(false) }) { Text("Done") } }
+        )
+    }
 }
 
 @Composable
@@ -316,8 +389,8 @@ private fun ShutterButton(mode: CameraMode, onPhoto: () -> Unit, onVideoToggle: 
     val action = when (mode) {
         CameraMode.PHOTO -> onPhoto
         CameraMode.VIDEO -> onVideoToggle
-        CameraMode.SCAN -> ({ context.startActivity(Intent(context, ScannerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
-        CameraMode.QR -> ({ context.startActivity(Intent(context, QrScannerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) })
+        CameraMode.SCAN -> ({ context.startActivity(Intent(context, ScannerActivity::class.java)) })
+        CameraMode.QR -> ({ context.startActivity(Intent(context, QrScannerActivity::class.java)) })
     }
     Box(Modifier.size(72.dp).background(Color.White.copy(alpha = if (enabled) 1f else 0.45f), CircleShape).clickable(enabled = enabled, onClick = action).padding(5.dp).background(Color.Black, CircleShape), contentAlignment = Alignment.Center) {
         Box(Modifier.size(if (mode == CameraMode.VIDEO) 42.dp else 58.dp).background(Color.White, if (mode == CameraMode.VIDEO) RoundedCornerShape(10.dp) else CircleShape))
@@ -325,10 +398,10 @@ private fun ShutterButton(mode: CameraMode, onPhoto: () -> Unit, onVideoToggle: 
 }
 
 @Composable
-private fun BottomNavigation(onCamera: () -> Unit, onGallery: () -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Color.Black).height(58.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
-        NavigationItem("CAMERA", true, onCamera)
-        NavigationItem("GALLERY", false, onGallery)
+private fun BottomNavigation(onCamera: () -> Unit, onGallery: () -> Unit, cameraSelected: Boolean) {
+    Row(Modifier.fillMaxWidth().background(Color.Black).height(58.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        NavigationItem("CAMERA", cameraSelected, onCamera)
+        NavigationItem("GALLERY", !cameraSelected, onGallery)
     }
 }
 
