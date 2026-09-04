@@ -3,7 +3,6 @@ package com.devlinguistpro.mediatoolbox
 import android.Manifest
 import android.app.RecoverableSecurityException
 import android.content.ContentUris
-import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -27,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -54,41 +52,18 @@ import kotlinx.coroutines.withContext
 
 private enum class GalleryTab { PHOTOS, ALBUMS, VIDEOS }
 
-private data class MediaItem(
-    val uri: Uri,
-    val name: String,
-    val dateAdded: Long,
-    val isVideo: Boolean,
-    val bucketId: String?,
-    val bucketName: String?
-)
-
-private data class Album(
-    val id: String,
-    val name: String,
-    val count: Int,
-    val coverUri: Uri,
-    val containsVideo: Boolean = false
-)
+private data class MediaItem(val uri: Uri, val name: String, val dateAdded: Long, val isVideo: Boolean, val bucketId: String?, val bucketName: String?)
+private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val containsVideo: Boolean = false)
 
 class GalleryActivity : ComponentActivity() {
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        if (it.values.any { granted -> granted }) recreate()
-    }
-
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (it.values.any { granted -> granted }) recreate() }
     private val deleteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { recreate() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                GalleryApp(
-                    hasPermission = hasMediaPermission(),
-                    requestPermission = ::requestMediaPermission,
-                    onBack = ::finish,
-                    onDelete = ::deleteMedia,
-                    onEdit = ::openEditor
-                )
+                GalleryApp(hasPermission = hasMediaPermission(), requestPermission = ::requestMediaPermission, onBack = ::finish, onDelete = ::deleteMedia, onEdit = ::openEditor)
             }
         }
     }
@@ -109,9 +84,7 @@ class GalleryActivity : ComponentActivity() {
         }
     }
 
-    private fun openEditor(uri: Uri) {
-        startActivityForResult(Intent(this, GalleryEditorActivity::class.java).putExtra(GalleryEditorActivity.EXTRA_URI, uri.toString()), EDIT_REQUEST)
-    }
+    private fun openEditor(uri: Uri) { startActivityForResult(Intent(this, GalleryEditorActivity::class.java).putExtra(GalleryEditorActivity.EXTRA_URI, uri.toString()), EDIT_REQUEST) }
 
     private fun deleteMedia(uri: Uri) {
         try {
@@ -128,13 +101,7 @@ class GalleryActivity : ComponentActivity() {
 }
 
 @Composable
-private fun GalleryApp(
-    hasPermission: Boolean,
-    requestPermission: () -> Unit,
-    onBack: () -> Unit,
-    onDelete: (Uri) -> Unit,
-    onEdit: (Uri) -> Unit
-) {
+private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, onBack: () -> Unit, onDelete: (Uri) -> Unit, onEdit: (Uri) -> Unit) {
     var tab by rememberSaveable { mutableStateOf(GalleryTab.PHOTOS) }
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -143,21 +110,10 @@ private fun GalleryApp(
     val context = LocalContext.current
 
     if (selectedUri != null) {
-        MediaViewer(
-            uri = selectedUri!!,
-            isVideo = selectedIsVideo,
-            onBack = { selectedUri = null },
-            onShare = { shareMedia(context, selectedUri!!) },
-            onEdit = if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }),
-            onDelete = { onDelete(selectedUri!!); selectedUri = null; refreshToken++ }
-        )
+        MediaViewer(uri = selectedUri!!, isVideo = selectedIsVideo, onBack = { selectedUri = null }, onShare = { shareMedia(context, selectedUri!!) }, onEdit = if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }), onDelete = { onDelete(selectedUri!!); selectedUri = null; refreshToken++ })
         return
     }
-
-    if (!hasPermission) {
-        GalleryPermissionScreen(requestPermission, onBack)
-        return
-    }
+    if (!hasPermission) { GalleryPermissionScreen(requestPermission, onBack); return }
 
     var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
@@ -169,12 +125,8 @@ private fun GalleryApp(
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         GalleryHeader(onBack)
-        if (tab == GalleryTab.ALBUMS) {
-            AlbumGrid(albums) { album ->
-                selectedAlbumId = album.id
-                tab = if (album.containsVideo) GalleryTab.VIDEOS else GalleryTab.PHOTOS
-            }
-        } else MediaGrid(media) { item -> selectedUri = item.uri; selectedIsVideo = item.isVideo }
+        if (tab == GalleryTab.ALBUMS) AlbumGrid(albums) { album -> selectedAlbumId = album.id; tab = if (album.containsVideo) GalleryTab.VIDEOS else GalleryTab.PHOTOS }
+        else MediaGrid(media) { item -> selectedUri = item.uri; selectedIsVideo = item.isVideo }
         GalleryTabs(tab) { tab = it; selectedAlbumId = null }
     }
 }
@@ -191,9 +143,7 @@ private fun queryMedia(context: Context, videosOnly: Boolean, bucketId: String? 
         val date = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
         val bucket = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_ID)
         val bucketName = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
-        while (cursor.moveToNext()) {
-            result += MediaItem(ContentUris.withAppendedId(collection, cursor.getLong(id)), cursor.getString(name) ?: "", cursor.getLong(date), videosOnly, if (bucket >= 0) cursor.getString(bucket) else null, if (bucketName >= 0) cursor.getString(bucketName) else null)
-        }
+        while (cursor.moveToNext()) result += MediaItem(ContentUris.withAppendedId(collection, cursor.getLong(id)), cursor.getString(name) ?: "", cursor.getLong(date), videosOnly, if (bucket >= 0) cursor.getString(bucket) else null, if (bucketName >= 0) cursor.getString(bucketName) else null)
     }
     return result
 }
@@ -209,16 +159,13 @@ private fun queryAlbums(context: Context): List<Album> {
 
 private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_INT >= 29) {
     if (videosOnly) MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL) else MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-} else {
-    if (videosOnly) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-}
+} else if (videosOnly) MediaStore.Video.Media.EXTERNAL_CONTENT_URI else MediaStore.Images.Media.EXTERNAL_CONTENT_URI
 
 @Composable
 private fun GalleryHeader(onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth().background(Color.Black).padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to camera", tint = Color.White) }
         Text("Gallery", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-        IconButton(onClick = {}) { Icon(Icons.Default.MoreVert, "More", tint = Color.White) }
     }
 }
 
@@ -247,7 +194,7 @@ private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () ->
 
 @Composable
 private fun MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
-    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
+    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) Text("No media found", color = Color.LightGray)
     else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
     }
@@ -255,7 +202,7 @@ private fun MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
 
 @Composable
 private fun AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
-    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) }
+    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) Text("No albums found", color = Color.LightGray)
     else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.id }) { album ->
             Column(Modifier.clickable { onClick(album) }) {
@@ -270,15 +217,8 @@ private fun AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
 private fun MediaThumbnail(uri: Uri, description: String, modifier: Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uri) {
-        bitmap = withContext(Dispatchers.IO) {
-            try { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(400, 400), null) else context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } }
-            catch (_: Exception) { null }
-        }
-    }
-    Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
-        bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-    }
+    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { try { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(400, 400), null) else context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } } catch (_: Exception) { null } } }
+    Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } }
 }
 
 @Composable
