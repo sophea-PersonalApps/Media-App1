@@ -36,8 +36,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -86,8 +88,10 @@ class ScannerActivity : ComponentActivity() {
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var showingPreview by mutableStateOf(false)
     private var selectedFolderName by mutableStateOf("Choose folder when saving")
+    private var cameraPermissionGranted by mutableStateOf(false)
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraPermissionGranted = granted
         if (granted) bindCamera()
     }
 
@@ -106,17 +110,18 @@ class ScannerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cameraPermissionGranted = hasCameraPermission()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         selectedFolderName = currentFolderName()
         setContent {
             MaterialTheme {
                 ScannerApp(
                     pages = pages,
-                    hasCameraPermission = hasCameraPermission(),
+                    hasCameraPermission = cameraPermissionGranted,
                     showingPreview = showingPreview,
                     folderName = selectedFolderName,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
-                    onPreviewReady = { previewView = it; if (hasCameraPermission()) bindCamera() },
+                    onPreviewReady = { previewView = it; if (cameraPermissionGranted) bindCamera() },
                     onCapture = ::capturePage,
                     onDeletePage = ::deletePage,
                     onFinish = { if (pages.isNotEmpty()) showingPreview = true },
@@ -130,11 +135,19 @@ class ScannerActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        val granted = hasCameraPermission()
+        if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
+        if (granted && previewView != null && !showingPreview) bindCamera()
+    }
+
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun bindCamera() {
         val view = previewView ?: return
+        if (!hasCameraPermission()) return
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
@@ -187,9 +200,15 @@ class ScannerActivity : ComponentActivity() {
         getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)?.let(Uri::parse)?.let(::folderName)
             ?: "Choose folder when saving"
 
-    private fun folderName(uri: Uri): String =
-        DocumentsContract.getTreeDocumentId(uri)?.substringAfterLast(':')?.replace('%20', ' ')
-            ?.takeIf { it.isNotBlank() } ?: "Chosen folder"
+    private fun folderName(uri: Uri): String = try {
+        DocumentsContract.getTreeDocumentId(uri)
+            ?.substringAfterLast(':')
+            ?.let(Uri::decode)
+            ?.takeIf { it.isNotBlank() }
+            ?: "Chosen folder"
+    } catch (_: Exception) {
+        "Chosen folder"
+    }
 
     private fun savePdf() {
         val folder = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_FOLDER_URI, null)?.let(Uri::parse)
@@ -294,7 +313,7 @@ private fun ScannerApp(
 @Composable
 private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
     Column(
-        Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).padding(28.dp),
+        Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().navigationBarsPadding().padding(28.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -331,12 +350,12 @@ private fun ScannerCapture(
             modifier = Modifier.fillMaxSize()
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = androidx.compose.ui.graphics.Color.White) }
                 Text("Scanner", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
                 IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = androidx.compose.ui.graphics.Color.White) }
             }
-            Column(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.82f)).padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Column(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (pages.isNotEmpty()) {
                     LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         itemsIndexed(pages) { index, path ->
@@ -372,7 +391,7 @@ private fun ScannerPreview(
     onChooseFolder: () -> Unit,
     onSave: () -> Unit
 ) {
-    Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black)) {
+    Column(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color.Black).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = androidx.compose.ui.graphics.Color.White) }
             Text("Preview", color = androidx.compose.ui.graphics.Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
