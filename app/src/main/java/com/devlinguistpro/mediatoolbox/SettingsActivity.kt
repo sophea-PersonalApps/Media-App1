@@ -66,7 +66,7 @@ class SettingsActivity : ComponentActivity() {
                     aboutOpen = aboutOpen,
                     onBack = ::finish,
                     onChooseScannerFolder = { folderPicker.launch(null) },
-                    onKeepScreenOnChanged = ::setKeepScreenOn,
+                    onKeepScreenOnChanged = ::saveKeepScreenOn,
                     onAbout = { aboutOpen = true },
                     onDismissAbout = { aboutOpen = false }
                 )
@@ -81,7 +81,7 @@ class SettingsActivity : ComponentActivity() {
             ?.let(Uri::parse)?.let(::folderName) ?: MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER
     }
 
-    private fun setKeepScreenOn(value: Boolean) {
+    private fun saveKeepScreenOn(value: Boolean) {
         keepScreenOn = value
         getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE).edit()
             .putBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, value).apply()
