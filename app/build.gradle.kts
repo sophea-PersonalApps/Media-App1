@@ -37,7 +37,7 @@ android {
 
 dependencies {
     val cameraxVersion = "1.5.3"
-    val composeVersion = "1.9.0"
+    val composeVersion = "1.7.8"
 
     implementation("androidx.core:core-ktx:1.17.0")
     implementation("androidx.activity:activity-compose:1.11.0")
@@ -45,7 +45,7 @@ dependencies {
 
     implementation("androidx.compose.ui:ui:$composeVersion")
     implementation("androidx.compose.ui:ui-tooling-preview:$composeVersion")
-    implementation("androidx.compose.material3:material3:1.4.0")
+    implementation("androidx.compose.material3:material3:1.3.2")
     implementation("androidx.compose.material:material-icons-extended:$composeVersion")
     debugImplementation("androidx.compose.ui:ui-tooling:$composeVersion")
 
