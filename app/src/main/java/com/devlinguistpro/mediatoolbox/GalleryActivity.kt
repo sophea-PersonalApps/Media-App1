@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
@@ -45,38 +46,49 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-private enum class GalleryTab { PHOTOS, ALBUMS, VIDEOS }
+private enum class GalleryTab { PHOTOS, VIDEOS, ALBUMS }
 private data class MediaItem(val uri: Uri, val name: String, val dateAdded: Long, val isVideo: Boolean, val bucketId: String?, val bucketName: String?)
-private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val containsVideo: Boolean = false)
+private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val containsVideo: Boolean)
 
 class GalleryActivity : ComponentActivity() {
-    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (it.values.any { granted -> granted }) recreate() }
-    private val deleteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { recreate() }
+    private var mediaPermissionGranted by mutableStateOf(false)
+    private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        mediaPermissionGranted = if (Build.VERSION.SDK_INT >= 33) {
+            results[Manifest.permission.READ_MEDIA_IMAGES] == true || results[Manifest.permission.READ_MEDIA_VIDEO] == true
+        } else results[Manifest.permission.READ_EXTERNAL_STORAGE] == true
+    }
+    private val deleteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) {}
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { GalleryApp(hasPermission = hasMediaPermission(), requestPermission = ::requestMediaPermission, onBack = ::finish, onDelete = ::deleteMedia, onEdit = ::openEditor) } }
-    }
-
-    private fun hasMediaPermission(): Boolean = when {
-        Build.VERSION.SDK_INT >= 34 -> has(Manifest.permission.READ_MEDIA_IMAGES) || has(Manifest.permission.READ_MEDIA_VIDEO) || has(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)
-        Build.VERSION.SDK_INT >= 33 -> has(Manifest.permission.READ_MEDIA_IMAGES) || has(Manifest.permission.READ_MEDIA_VIDEO)
-        else -> has(Manifest.permission.READ_EXTERNAL_STORAGE)
-    }
-    private fun has(permission: String) = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-    private fun requestMediaPermission() {
-        when {
-            Build.VERSION.SDK_INT >= 34 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
-            Build.VERSION.SDK_INT >= 33 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
-            else -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+        mediaPermissionGranted = hasMediaPermission()
+        setContent {
+            MaterialTheme {
+                GalleryApp(mediaPermissionGranted, ::requestMediaPermission, ::finish, ::deleteMedia, ::openEditor)
+            }
         }
     }
-    private fun openEditor(uri: Uri) { startActivityForResult(Intent(this, GalleryEditorActivity::class.java).putExtra(GalleryEditorActivity.EXTRA_URI, uri.toString()), EDIT_REQUEST) }
+
+    override fun onResume() {
+        super.onResume()
+        val granted = hasMediaPermission()
+        if (mediaPermissionGranted != granted) mediaPermissionGranted = granted
+    }
+
+    private fun hasMediaPermission(): Boolean = if (Build.VERSION.SDK_INT >= 33) {
+        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+    } else ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    private fun requestMediaPermission() {
+        if (Build.VERSION.SDK_INT >= 33) permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
+        else permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
+    }
+
     private fun deleteMedia(uri: Uri) {
         try {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -84,9 +96,14 @@ class GalleryActivity : ComponentActivity() {
                 deleteLauncher.launch(IntentSenderRequest.Builder(request.intentSender).build())
             } else contentResolver.delete(uri, null, null)
         } catch (e: RecoverableSecurityException) {
-            if (Build.VERSION.SDK_INT >= 29) deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
-        }
+            deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
+        } catch (_: Exception) { Toast.makeText(this, "Could not delete item", Toast.LENGTH_SHORT).show() }
     }
+
+    private fun openEditor(uri: Uri) {
+        startActivityForResult(Intent(this, GalleryEditorActivity::class.java).putExtra(GalleryEditorActivity.EXTRA_URI, uri), EDIT_REQUEST)
+    }
+
     companion object { private const val EDIT_REQUEST = 401 }
 }
 
@@ -99,7 +116,7 @@ private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, on
     var refreshToken by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     if (selectedUri != null) {
-        MediaViewer(uri = selectedUri!!, isVideo = selectedIsVideo, onBack = { selectedUri = null }, onShare = { shareMedia(context, selectedUri!!) }, onEdit = if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }), onDelete = { onDelete(selectedUri!!); selectedUri = null; refreshToken++ })
+        MediaViewer(selectedUri!!, selectedIsVideo, { selectedUri = null }, { shareMedia(context, selectedUri!!) }, if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }), { onDelete(selectedUri!!); selectedUri = null; refreshToken++ })
         return
     }
     if (!hasPermission) { GalleryPermissionScreen(requestPermission, onBack); return }
@@ -179,27 +196,21 @@ private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () ->
 }
 
 @Composable
-private fun MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
-    if (items.isEmpty()) {
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
-    } else {
-        LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
-        }
+private fun ColumnScope.MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
+    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
+    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
     }
 }
 
 @Composable
-private fun AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
-    if (albums.isEmpty()) {
-        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) }
-    } else {
-        LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            items(albums, key = { it.id }) { album ->
-                Column(Modifier.clickable { onClick(album) }) {
-                    MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f)) {}
-                    Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
-                }
+private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
+    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) }
+    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        items(albums, key = { it.id }) { album ->
+            Column(Modifier.clickable { onClick(album) }) {
+                MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f)) {}
+                Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
             }
         }
     }
@@ -209,33 +220,36 @@ private fun AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
 private fun MediaThumbnail(uri: Uri, description: String, modifier: Modifier, onClick: () -> Unit) {
     val context = LocalContext.current
     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { try { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(400, 400), null) else context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } } catch (_: Exception) { null } } }
+    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri) } }
     Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } }
 }
 
 @Composable
 private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
-    var confirmDelete by rememberSaveable { mutableStateOf(false) }
-    val context = LocalContext.current
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        if (isVideo) AndroidView(factory = { ctx -> android.widget.VideoView(ctx).apply { setVideoURI(uri); setOnPreparedListener { it.start() } } }, modifier = Modifier.fillMaxSize())
-        else {
-            var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-            LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { try { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, android.util.Size(1600, 1600), null) else context.contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } } catch (_: Exception) { null } } }
-            bitmap?.let { Image(it.asImageBitmap(), "Selected photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
-        }
-        Row(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.6f)).padding(6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-            Row {
-                if (onEdit != null) IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) }
+    Surface(Modifier.fillMaxSize(), color = Color.Black) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+                Spacer(Modifier.weight(1f))
                 IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
-                IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
+                onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
+            }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (isVideo) Text("Video playback", color = Color.White)
+                else {
+                    val context = LocalContext.current
+                    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
+                    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri) } }
+                    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
+                }
             }
         }
     }
-    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete this item?") }, text = { Text("The item will be removed from your media library.") }, confirmButton = { Button(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { Button(onClick = { confirmDelete = false }) { Text("Cancel") } })
 }
 
 private fun shareMedia(context: Context, uri: Uri) {
-    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uri) ?: "application/octet-stream"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share media"))
+    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uri) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share media"))
 }
+
+private fun loadThumbnail(context: Context, uri: Uri): Bitmap? = runCatching { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }.getOrNull()
