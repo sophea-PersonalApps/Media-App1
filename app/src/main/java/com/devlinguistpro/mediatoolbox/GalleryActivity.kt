@@ -135,8 +135,10 @@ private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, on
     LaunchedEffect(tab, selectedAlbumId, refreshToken) {
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
             albums = withContext(Dispatchers.IO) { queryAlbums(context) }
+        } else if (selectedAlbumId != null) {
+            media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!) }
         } else {
-            media = withContext(Dispatchers.IO) { queryMedia(context, tab == GalleryTab.VIDEOS, selectedAlbumId) }
+            media = withContext(Dispatchers.IO) { queryMedia(context, tab == GalleryTab.VIDEOS, null) }
         }
     }
 
@@ -182,6 +184,9 @@ private fun queryMedia(context: Context, videosOnly: Boolean, bucketId: String? 
     }
     return result
 }
+
+private fun queryAlbumMedia(context: Context, bucketId: String): List<MediaItem> =
+    (queryMedia(context, false, bucketId) + queryMedia(context, true, bucketId)).sortedByDescending { it.dateAdded }
 
 private fun queryAlbums(context: Context): List<Album> {
     val grouped = LinkedHashMap<String, MutableList<MediaItem>>()
