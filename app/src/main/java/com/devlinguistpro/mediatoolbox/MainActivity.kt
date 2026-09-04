@@ -81,10 +81,19 @@ class MainActivity : ComponentActivity() {
     private var previewView: PreviewView? = null
     private var cameraPermissionGranted by mutableStateOf(false)
     private var flashSetting by mutableStateOf(FlashSetting.OFF)
+    private var pendingVideoRecording = false
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
         if (granted) bindCamera()
+    }
+
+    private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (pendingVideoRecording) {
+            pendingVideoRecording = false
+            if (granted) startVideoRecording()
+            else Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,6 +135,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun changeMode(mode: CameraMode) {
         if (activeRecording != null && mode != CameraMode.VIDEO) { activeRecording?.stop(); activeRecording = null }
@@ -204,18 +215,28 @@ class MainActivity : ComponentActivity() {
     private fun toggleVideoRecording() {
         if (currentMode != CameraMode.VIDEO) return
         activeRecording?.let { it.stop(); return }
+        if (!hasAudioPermission()) {
+            pendingVideoRecording = true
+            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        startVideoRecording()
+    }
+
+    private fun startVideoRecording() {
+        if (currentMode != CameraMode.VIDEO || activeRecording != null) return
         val capture = videoCapture ?: run { Toast.makeText(this, "Video camera is not ready", Toast.LENGTH_SHORT).show(); return }
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, "VID_$timestamp.mp4"); put(MediaStore.Video.Media.MIME_TYPE, "video/mp4"); put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox"); put(MediaStore.Video.Media.IS_PENDING, 1) }
             val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
-            activeRecording = capture.output.prepareRecording(this, output).start(ContextCompat.getMainExecutor(this)) { event ->
+            activeRecording = capture.output.prepareRecording(this, output).withAudioEnabled().start(ContextCompat.getMainExecutor(this)) { event ->
                 if (event is VideoRecordEvent.Finalize) { activeRecording = null; if (event.hasError()) { contentResolver.delete(event.outputResults.outputUri, null, null); Toast.makeText(this, "Could not save video", Toast.LENGTH_SHORT).show() } else { contentResolver.update(event.outputResults.outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null); Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show() } }
             }
         } else {
             val directory = getExternalFilesDir(Environment.DIRECTORY_MOVIES) ?: run { Toast.makeText(this, "Video storage is unavailable", Toast.LENGTH_SHORT).show(); return }
             val file = File(directory, "VID_$timestamp.mp4")
-            activeRecording = capture.output.prepareRecording(this, FileOutputOptions.Builder(file).build()).start(ContextCompat.getMainExecutor(this)) { event -> if (event is VideoRecordEvent.Finalize) { activeRecording = null; if (event.hasError()) Toast.makeText(this, "Could not save video", Toast.LENGTH_SHORT).show() else Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show() } }
+            activeRecording = capture.output.prepareRecording(this, FileOutputOptions.Builder(file).build()).withAudioEnabled().start(ContextCompat.getMainExecutor(this)) { event -> if (event is VideoRecordEvent.Finalize) { activeRecording = null; if (event.hasError()) Toast.makeText(this, "Could not save video", Toast.LENGTH_SHORT).show() else Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show() } }
         }
     }
 
@@ -264,9 +285,12 @@ private fun MediaToolboxApp(hasCameraPermission: Boolean, flashSetting: FlashSet
         }
     }
     if (moreOpen) AlertDialog(onDismissRequest = { setMoreOpen(false) }, title = { Text("More camera options") }, text = { Column {
-        Text("Flash: ${flashSetting.label}"); Spacer(Modifier.height(8.dp))
-        Button(onClick = { onCycleFlash(); setMoreOpen(false) }) { val icon = when (flashSetting) { FlashSetting.OFF -> Icons.Default.FlashOff; FlashSetting.AUTO -> Icons.Default.FlashAuto; FlashSetting.ON -> Icons.Default.FlashOn }; Icon(icon, "Flash"); Spacer(Modifier.size(6.dp)); Text("Change flash") }
-        Spacer(Modifier.height(8.dp)); Button(onClick = { setMoreOpen(false); onOpenSettings() }) { Icon(Icons.Default.Settings, "Settings"); Spacer(Modifier.size(6.dp)); Text("Settings") }
+        if (mode == CameraMode.PHOTO) {
+            Text("Flash: ${flashSetting.label}"); Spacer(Modifier.height(8.dp))
+            Button(onClick = { onCycleFlash(); setMoreOpen(false) }) { val icon = when (flashSetting) { FlashSetting.OFF -> Icons.Default.FlashOff; FlashSetting.AUTO -> Icons.Default.FlashAuto; FlashSetting.ON -> Icons.Default.FlashOn }; Icon(icon, "Flash"); Spacer(Modifier.size(6.dp)); Text("Change flash") }
+            Spacer(Modifier.height(8.dp))
+        }
+        Button(onClick = { setMoreOpen(false); onOpenSettings() }) { Icon(Icons.Default.Settings, "Settings"); Spacer(Modifier.size(6.dp)); Text("Settings") }
         Spacer(Modifier.height(8.dp)); Text("Options are kept simple; device-specific camera features such as HDR are not forced because support varies by device.", color = Color.Gray, fontSize = 12.sp)
     } }, confirmButton = { Button(onClick = { setMoreOpen(false) }) { Text("Done") } })
 }
