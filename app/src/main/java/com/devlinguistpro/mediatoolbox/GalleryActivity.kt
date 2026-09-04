@@ -51,7 +51,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private enum class GalleryTab { PHOTOS, ALBUMS, VIDEOS }
-
 private data class MediaItem(val uri: Uri, val name: String, val dateAdded: Long, val isVideo: Boolean, val bucketId: String?, val bucketName: String?)
 private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val containsVideo: Boolean = false)
 
@@ -61,11 +60,7 @@ class GalleryActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            MaterialTheme {
-                GalleryApp(hasPermission = hasMediaPermission(), requestPermission = ::requestMediaPermission, onBack = ::finish, onDelete = ::deleteMedia, onEdit = ::openEditor)
-            }
-        }
+        setContent { MaterialTheme { GalleryApp(hasPermission = hasMediaPermission(), requestPermission = ::requestMediaPermission, onBack = ::finish, onDelete = ::deleteMedia, onEdit = ::openEditor) } }
     }
 
     private fun hasMediaPermission(): Boolean = when {
@@ -73,9 +68,7 @@ class GalleryActivity : ComponentActivity() {
         Build.VERSION.SDK_INT >= 33 -> has(Manifest.permission.READ_MEDIA_IMAGES) || has(Manifest.permission.READ_MEDIA_VIDEO)
         else -> has(Manifest.permission.READ_EXTERNAL_STORAGE)
     }
-
     private fun has(permission: String) = ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
-
     private fun requestMediaPermission() {
         when {
             Build.VERSION.SDK_INT >= 34 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
@@ -83,9 +76,7 @@ class GalleryActivity : ComponentActivity() {
             else -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
         }
     }
-
     private fun openEditor(uri: Uri) { startActivityForResult(Intent(this, GalleryEditorActivity::class.java).putExtra(GalleryEditorActivity.EXTRA_URI, uri.toString()), EDIT_REQUEST) }
-
     private fun deleteMedia(uri: Uri) {
         try {
             if (Build.VERSION.SDK_INT >= 30) {
@@ -96,7 +87,6 @@ class GalleryActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= 29) deleteLauncher.launch(IntentSenderRequest.Builder(e.userAction.actionIntent.intentSender).build())
         }
     }
-
     companion object { private const val EDIT_REQUEST = 401 }
 }
 
@@ -108,21 +98,17 @@ private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, on
     var selectedIsVideo by rememberSaveable { mutableStateOf(false) }
     var refreshToken by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
-
     if (selectedUri != null) {
         MediaViewer(uri = selectedUri!!, isVideo = selectedIsVideo, onBack = { selectedUri = null }, onShare = { shareMedia(context, selectedUri!!) }, onEdit = if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }), onDelete = { onDelete(selectedUri!!); selectedUri = null; refreshToken++ })
         return
     }
     if (!hasPermission) { GalleryPermissionScreen(requestPermission, onBack); return }
-
     var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-
     LaunchedEffect(tab, selectedAlbumId, refreshToken) {
         if (tab == GalleryTab.ALBUMS) albums = withContext(Dispatchers.IO) { queryAlbums(context) }
         else media = withContext(Dispatchers.IO) { queryMedia(context, tab == GalleryTab.VIDEOS, selectedAlbumId) }
     }
-
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         GalleryHeader(onBack)
         if (tab == GalleryTab.ALBUMS) AlbumGrid(albums) { album -> selectedAlbumId = album.id; tab = if (album.containsVideo) GalleryTab.VIDEOS else GalleryTab.PHOTOS }
@@ -194,20 +180,26 @@ private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () ->
 
 @Composable
 private fun MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
-    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) Text("No media found", color = Color.LightGray)
-    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
+    } else {
+        LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
+        }
     }
 }
 
 @Composable
 private fun AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
-    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) Text("No albums found", color = Color.LightGray)
-    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(albums, key = { it.id }) { album ->
-            Column(Modifier.clickable { onClick(album) }) {
-                MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f)) {}
-                Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
+    if (albums.isEmpty()) {
+        Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) }
+    } else {
+        LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(albums, key = { it.id }) { album ->
+                Column(Modifier.clickable { onClick(album) }) {
+                    MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f)) {}
+                    Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
+                }
             }
         }
     }
