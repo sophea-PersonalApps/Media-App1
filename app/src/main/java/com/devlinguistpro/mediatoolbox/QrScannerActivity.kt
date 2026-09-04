@@ -21,15 +21,20 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
@@ -40,7 +45,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -60,34 +68,57 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class QrScannerActivity : ComponentActivity() {
     private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private val barcodeScanner by lazy {
+        BarcodeScanning.getClient(
+            BarcodeScannerOptions.Builder()
+                .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+                .build()
+        )
+    }
     private var cameraProvider: ProcessCameraProvider? = null
     private var previewView: PreviewView? = null
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var result by mutableStateOf<String?>(null)
-    private var scannerReady by mutableStateOf(false)
+    private var cameraPermissionGranted by mutableStateOf(false)
     private val resultLocked = AtomicBoolean(false)
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        cameraPermissionGranted = granted
         if (granted) bindCamera()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cameraPermissionGranted = hasCameraPermission()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         setContent {
             MaterialTheme {
                 QrScannerScreen(
+                    hasCameraPermission = cameraPermissionGranted,
                     result = result,
-                    onPreviewReady = { previewView = it; if (hasCameraPermission()) bindCamera() },
+                    onPreviewReady = {
+                        previewView = it
+                        if (cameraPermissionGranted) bindCamera()
+                    },
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     onBack = ::finish,
                     onFlip = ::flipCamera,
-                    onScanAgain = { resultLocked.set(false); result = null; bindCamera() },
+                    onScanAgain = {
+                        resultLocked.set(false)
+                        result = null
+                    },
                     onCopy = { copyResult(result) },
                     onOpen = { openResult(result) }
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val granted = hasCameraPermission()
+        if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
+        if (granted && previewView != null) bindCamera()
     }
 
     private fun hasCameraPermission(): Boolean =
@@ -96,20 +127,16 @@ class QrScannerActivity : ComponentActivity() {
     private fun bindCamera() {
         val view = previewView ?: return
         if (!hasCameraPermission()) return
-        scannerReady = false
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
                 val provider = future.get()
                 cameraProvider = provider
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
-                val options = BarcodeScannerOptions.Builder()
-                    .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-                    .build()
-                val scanner = BarcodeScanning.getClient(options)
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
+
                 analysis.setAnalyzer(cameraExecutor) { imageProxy ->
                     if (resultLocked.get()) {
                         imageProxy.close()
@@ -121,29 +148,34 @@ class QrScannerActivity : ComponentActivity() {
                         return@setAnalyzer
                     }
                     val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
-                    scanner.process(image)
+                    barcodeScanner.process(image)
                         .addOnSuccessListener { barcodes ->
-                            val value = barcodes.firstOrNull()?.rawValue
+                            val value = barcodes.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
                             if (!value.isNullOrBlank() && resultLocked.compareAndSet(false, true)) {
                                 result = value
                             }
                         }
                         .addOnCompleteListener { imageProxy.close() }
                 }
+
                 val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
                 provider.unbindAll()
                 provider.bindToLifecycle(this, selector, preview, analysis)
-                scannerReady = true
             } catch (_: Exception) {
-                scannerReady = false
-                runOnUiThread { Toast.makeText(this, "QR scanner camera could not start", Toast.LENGTH_SHORT).show() }
+                runOnUiThread {
+                    Toast.makeText(this, "QR scanner camera could not start", Toast.LENGTH_SHORT).show()
+                }
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun flipCamera() {
         if (result != null) return
-        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
+        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+            CameraSelector.LENS_FACING_FRONT
+        } else {
+            CameraSelector.LENS_FACING_BACK
+        }
         bindCamera()
     }
 
@@ -156,8 +188,9 @@ class QrScannerActivity : ComponentActivity() {
 
     private fun openResult(value: String?) {
         if (value.isNullOrBlank()) return
-        val uri = try { Uri.parse(value) } catch (_: Exception) { null }
-        if (uri == null || uri.scheme !in setOf("http", "https")) {
+        val uri = try { Uri.parse(value.trim()) } catch (_: Exception) { null }
+        val scheme = uri?.scheme?.lowercase()
+        if (uri == null || scheme !in setOf("http", "https")) {
             Toast.makeText(this, "This QR code is not a web link", Toast.LENGTH_SHORT).show()
             return
         }
@@ -170,6 +203,7 @@ class QrScannerActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cameraProvider?.unbindAll()
+        barcodeScanner.close()
         cameraExecutor.shutdown()
         super.onDestroy()
     }
@@ -177,6 +211,7 @@ class QrScannerActivity : ComponentActivity() {
 
 @Composable
 private fun QrScannerScreen(
+    hasCameraPermission: Boolean,
     result: String?,
     onPreviewReady: (PreviewView) -> Unit,
     onRequestPermission: () -> Unit,
@@ -188,8 +223,12 @@ private fun QrScannerScreen(
 ) {
     val context = LocalContext.current
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            Column(Modifier.fillMaxSize().padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        if (!hasCameraPermission) {
+            Column(
+                Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(28.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 Text("Camera access is needed", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(12.dp))
                 Text("The QR scanner reads codes directly on your phone. Nothing is uploaded.", color = Color.LightGray)
@@ -201,14 +240,26 @@ private fun QrScannerScreen(
         } else {
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(
-                    factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
+                    factory = {
+                        PreviewView(context).apply {
+                            scaleType = PreviewView.ScaleType.FILL_CENTER
+                            implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                            onPreviewReady(this)
+                        }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
                 QrFinderOverlay()
-                Row(Modifier.fillMaxWidth().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
                     Text("QR SCANNER", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    IconButton(onClick = onFlip, enabled = result == null) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }
+                    IconButton(onClick = onFlip, enabled = result == null) {
+                        Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White)
+                    }
                 }
                 result?.let {
                     QrResultCard(it, onCopy, onOpen, onScanAgain, Modifier.align(Alignment.BottomCenter))
@@ -220,18 +271,51 @@ private fun QrScannerScreen(
 
 @Composable
 private fun QrFinderOverlay() {
-    Box(Modifier.fillMaxSize().padding(horizontal = 42.dp, vertical = 170.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(250.dp).background(Color.Transparent, RoundedCornerShape(20.dp)))
-        Text("Point the camera at a QR code", color = Color.White.copy(alpha = 0.9f), fontSize = 14.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp))
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val finderSize = when {
+            maxWidth < 340.dp -> 190.dp
+            maxWidth < 420.dp -> 230.dp
+            else -> 270.dp
+        }
+        Box(
+            Modifier
+                .size(finderSize)
+                .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(20.dp))
+        )
+        Text(
+            "Point the camera at a QR code",
+            color = Color.White.copy(alpha = 0.9f),
+            fontSize = 14.sp,
+            modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 150.dp)
+        )
     }
 }
 
 @Composable
-private fun QrResultCard(value: String, onCopy: () -> Unit, onOpen: () -> Unit, onScanAgain: () -> Unit, modifier: Modifier) {
-    Column(modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.92f)).padding(18.dp)) {
+private fun QrResultCard(
+    value: String,
+    onCopy: () -> Unit,
+    onOpen: () -> Unit,
+    onScanAgain: () -> Unit,
+    modifier: Modifier
+) {
+    val isWebLink = runCatching { Uri.parse(value.trim()).scheme?.lowercase() in setOf("http", "https") }.getOrDefault(false)
+    Column(
+        modifier
+            .fillMaxWidth()
+            .background(Color.Black.copy(alpha = 0.94f))
+            .navigationBarsPadding()
+            .padding(18.dp)
+    ) {
         Text("QR code found", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
-        Text(value, color = Color.White, fontSize = 15.sp, maxLines = 5)
+        Text(
+            value,
+            color = Color.White,
+            fontSize = 15.sp,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+        )
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onCopy, modifier = Modifier.weight(1f)) {
@@ -239,7 +323,7 @@ private fun QrResultCard(value: String, onCopy: () -> Unit, onOpen: () -> Unit, 
                 Spacer(Modifier.size(5.dp))
                 Text("Copy")
             }
-            Button(onClick = onOpen, enabled = value.startsWith("https://") || value.startsWith("http://"), modifier = Modifier.weight(1f)) { Text("Open link") }
+            Button(onClick = onOpen, enabled = isWebLink, modifier = Modifier.weight(1f)) { Text("Open link") }
         }
         Spacer(Modifier.height(8.dp))
         Button(onClick = onScanAgain, modifier = Modifier.fillMaxWidth()) { Text("Scan another") }
