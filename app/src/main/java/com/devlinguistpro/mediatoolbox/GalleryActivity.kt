@@ -12,7 +12,11 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.Size
+import android.view.ViewGroup
+import android.widget.MediaController
 import android.widget.Toast
+import android.widget.VideoView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
@@ -46,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -222,7 +227,7 @@ private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () ->
 private fun ColumnScope.MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
     if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
     else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, Modifier.aspectRatio(1f)) { onClick(item) } }
+        items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f)) { onClick(item) } }
     }
 }
 
@@ -232,7 +237,7 @@ private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit)
     else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.id }) { album ->
             Column(Modifier.fillMaxWidth().clickable { onClick(album) }) {
-                MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f))
+                MediaThumbnail(album.coverUri, album.name, album.containsVideo, Modifier.fillMaxWidth().aspectRatio(1f))
                 Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
             }
         }
@@ -240,11 +245,18 @@ private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit)
 }
 
 @Composable
-private fun MediaThumbnail(uri: Uri, description: String, modifier: Modifier, onClick: () -> Unit = {}) {
+private fun MediaThumbnail(uri: Uri, description: String, isVideo: Boolean, modifier: Modifier, onClick: () -> Unit = {}) {
     val context = LocalContext.current
     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri) } }
-    Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } }
+    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) } }
+    Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+        if (isVideo) {
+            Box(Modifier.align(Alignment.BottomStart).padding(6.dp).background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
+                Text("VIDEO", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable
@@ -258,11 +270,11 @@ private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare:
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isVideo) Text("Video playback", color = Color.White)
+                if (isVideo) VideoPlayer(uri)
                 else {
                     val context = LocalContext.current
                     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-                    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri) } }
+                    LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
                     bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
                 }
             }
@@ -270,8 +282,40 @@ private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare:
     }
 }
 
+@Composable
+private fun VideoPlayer(uri: Uri) {
+    val context = LocalContext.current
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = {
+            VideoView(context).apply {
+                layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                setMediaController(MediaController(context).also { it.setAnchorView(this) })
+                setVideoURI(uri)
+                setOnPreparedListener { player -> player.isLooping = false; start() }
+                setOnErrorListener { _, _, _ -> Toast.makeText(context, "Could not play video", Toast.LENGTH_SHORT).show(); true }
+            }
+        },
+        update = { view -> if (view.tag != uri.toString()) { view.tag = uri.toString(); view.setVideoURI(uri); view.start() } }
+    )
+}
+
 private fun shareMedia(context: Context, uri: Uri) {
     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uri) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uri); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }, "Share media"))
 }
 
-private fun loadThumbnail(context: Context, uri: Uri): Bitmap? = runCatching { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }.getOrNull()
+private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? = runCatching {
+    if (Build.VERSION.SDK_INT >= 29) {
+        context.contentResolver.loadThumbnail(uri, Size(360, 360), null)
+    } else {
+        val kind = if (isVideo) MediaStore.Video.Thumbnails.MINI_KIND else MediaStore.Images.Thumbnails.MINI_KIND
+        if (isVideo) MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
+        else MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
+    }
+}.getOrElse {
+    runCatching { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }.getOrNull()
+}
+
+private fun loadFullImage(context: Context, uri: Uri): Bitmap? = runCatching {
+    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
+}.getOrNull()
