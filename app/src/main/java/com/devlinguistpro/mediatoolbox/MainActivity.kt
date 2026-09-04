@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
 import android.view.WindowManager
 import android.widget.Toast
@@ -17,6 +18,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.video.FileOutputOptions
 import androidx.camera.video.MediaStoreOutputOptions
 import androidx.camera.video.Quality
 import androidx.camera.video.QualitySelector
@@ -57,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,7 +67,6 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 private enum class CameraMode(val label: String) { PHOTO("CAMERA"), VIDEO("VIDEO"), SCAN("SCAN"), QR("QR") }
-
 private enum class FlashSetting(val label: String) { OFF("Off"), AUTO("Auto"), ON("On") }
 
 class MainActivity : ComponentActivity() {
@@ -74,6 +76,7 @@ class MainActivity : ComponentActivity() {
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording: Recording? = null
     private var currentLens = CameraSelector.LENS_FACING_BACK
+    private var currentMode = CameraMode.PHOTO
     private var previewView: PreviewView? = null
     private var cameraPermissionGranted by mutableStateOf(false)
     private var flashSetting by mutableStateOf(FlashSetting.OFF)
@@ -98,7 +101,8 @@ class MainActivity : ComponentActivity() {
                     onVideoToggle = ::toggleVideoRecording,
                     onFlip = ::flipCamera,
                     onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
-                    onCycleFlash = ::cycleFlash
+                    onCycleFlash = ::cycleFlash,
+                    onModeChanged = ::changeMode
                 )
             }
         }
@@ -111,8 +115,24 @@ class MainActivity : ComponentActivity() {
         if (granted && previewView != null) bindCamera()
     }
 
-    private fun hasCameraPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    private fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun changeMode(mode: CameraMode) {
+        if (activeRecording != null && mode != CameraMode.VIDEO) {
+            activeRecording?.stop()
+            activeRecording = null
+        }
+        if (mode == CameraMode.SCAN) {
+            startActivity(Intent(this, ScannerActivity::class.java))
+            return
+        }
+        if (mode == CameraMode.QR) {
+            startActivity(Intent(this, QrScannerActivity::class.java))
+            return
+        }
+        currentMode = mode
+        bindCamera()
+    }
 
     private fun bindCamera() {
         val view = previewView ?: return
@@ -123,23 +143,34 @@ class MainActivity : ComponentActivity() {
                 val provider = future.get()
                 cameraProvider = provider
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
-                val capture = ImageCapture.Builder()
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                    .setFlashMode(when (flashSetting) {
-                        FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
-                        FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
-                        FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
-                    })
-                    .build()
-                val recorder = Recorder.Builder().setQualitySelector(
-                    QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))
-                ).build()
-                val video = VideoCapture.withOutput(recorder)
                 val selector = CameraSelector.Builder().requireLensFacing(currentLens).build()
+
                 provider.unbindAll()
-                imageCapture = capture
-                videoCapture = video
-                provider.bindToLifecycle(this, selector, preview, capture, video)
+                imageCapture = null
+                videoCapture = null
+
+                if (currentMode == CameraMode.PHOTO) {
+                    val capture = ImageCapture.Builder()
+                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                        .setFlashMode(when (flashSetting) {
+                            FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
+                            FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
+                            FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
+                        })
+                        .build()
+                    imageCapture = capture
+                    provider.bindToLifecycle(this, selector, preview, capture)
+                } else {
+                    val recorder = Recorder.Builder().setQualitySelector(
+                        QualitySelector.from(
+                            Quality.HIGHEST,
+                            androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD)
+                        )
+                    ).build()
+                    val video = VideoCapture.withOutput(recorder)
+                    videoCapture = video
+                    provider.bindToLifecycle(this, selector, preview, video)
+                }
             } catch (_: Exception) {
                 imageCapture = null
                 videoCapture = null
@@ -155,7 +186,7 @@ class MainActivity : ComponentActivity() {
             FlashSetting.AUTO -> FlashSetting.ON
             FlashSetting.ON -> FlashSetting.OFF
         }
-        bindCamera()
+        if (currentMode == CameraMode.PHOTO) bindCamera()
     }
 
     private fun flipCamera() {
@@ -165,56 +196,114 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun capturePhoto() {
-        val capture = imageCapture ?: return
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
-        val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_$timestamp.jpg")
-            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= 29) {
-                put(MediaStore.Images.Media.RELATIVE_PATH, "DCIM/Media Toolbox")
-                put(MediaStore.Images.Media.IS_PENDING, 1)
-            }
+        val capture = imageCapture
+        if (capture == null || currentMode != CameraMode.PHOTO) {
+            Toast.makeText(this, "Camera is not ready", Toast.LENGTH_SHORT).show()
+            return
         }
-        val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
-        val output = ImageCapture.OutputFileOptions.Builder(contentResolver, uri, values).build()
+
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val tempFile = File(cacheDir, "IMG_$timestamp.jpg")
+        val output = ImageCapture.OutputFileOptions.Builder(tempFile).build()
+
         capture.takePicture(output, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                if (Build.VERSION.SDK_INT >= 29) contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                try {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_$timestamp.jpg")
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox")
+                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                        }
+                    }
+                    val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                        ?: throw IllegalStateException("Could not create gallery item")
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { outputStream ->
+                            tempFile.inputStream().use { input -> input.copyTo(outputStream) }
+                        } ?: throw IllegalStateException("Could not open gallery item")
+                        if (Build.VERSION.SDK_INT >= 29) {
+                            contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                        }
+                        runOnUiThread { Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show() }
+                    } catch (e: Exception) {
+                        contentResolver.delete(uri, null, null)
+                        throw e
+                    }
+                } catch (_: Exception) {
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Could not save photo", Toast.LENGTH_SHORT).show() }
+                } finally {
+                    tempFile.delete()
+                }
             }
-            override fun onError(exception: ImageCaptureException) { contentResolver.delete(uri, null, null) }
+
+            override fun onError(exception: ImageCaptureException) {
+                tempFile.delete()
+                runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_SHORT).show() }
+            }
         })
     }
 
     private fun toggleVideoRecording() {
-        activeRecording?.let { it.stop(); activeRecording = null; return }
-        val capture = videoCapture ?: return
+        if (currentMode != CameraMode.VIDEO) return
+        activeRecording?.let {
+            it.stop()
+            return
+        }
+
+        val capture = videoCapture
+        if (capture == null) {
+            Toast.makeText(this, "Video camera is not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
+
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         if (Build.VERSION.SDK_INT >= 29) {
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, "VID_$timestamp.mp4")
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
-                put(MediaStore.Video.Media.RELATIVE_PATH, "DCIM/Media Toolbox")
+                put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox")
                 put(MediaStore.Video.Media.IS_PENDING, 1)
             }
-            val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
+            val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+                .setContentValues(values)
+                .build()
             activeRecording = capture.output.prepareRecording(this, output).start(ContextCompat.getMainExecutor(this)) { event ->
                 if (event is VideoRecordEvent.Finalize) {
                     activeRecording = null
-                    if (event.hasError()) contentResolver.delete(event.outputResults.outputUri, null, null)
-                    else contentResolver.update(event.outputResults.outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                    if (event.hasError()) {
+                        contentResolver.delete(event.outputResults.outputUri, null, null)
+                        Toast.makeText(this, "Could not save video", Toast.LENGTH_SHORT).show()
+                    } else {
+                        contentResolver.update(event.outputResults.outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
+                        Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         } else {
-            val directory = getExternalFilesDir(android.os.Environment.DIRECTORY_MOVIES) ?: return
-            val file = java.io.File(directory, "VID_$timestamp.mp4")
-            val output = androidx.camera.video.FileOutputOptions.Builder(file).build()
+            val directory = getExternalFilesDir(Environment.DIRECTORY_MOVIES)
+            if (directory == null) {
+                Toast.makeText(this, "Video storage is unavailable", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val file = File(directory, "VID_$timestamp.mp4")
+            val output = FileOutputOptions.Builder(file).build()
             activeRecording = capture.output.prepareRecording(this, output).start(ContextCompat.getMainExecutor(this)) { event ->
-                if (event is VideoRecordEvent.Finalize) activeRecording = null
+                if (event is VideoRecordEvent.Finalize) {
+                    activeRecording = null
+                    if (event.hasError()) Toast.makeText(this, "Could not save video", Toast.LENGTH_SHORT).show()
+                    else Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
 
-    override fun onStop() { activeRecording?.stop(); activeRecording = null; super.onStop() }
+    override fun onStop() {
+        activeRecording?.stop()
+        activeRecording = null
+        super.onStop()
+    }
 
     override fun onDestroy() {
         activeRecording?.stop()
@@ -235,15 +324,32 @@ private fun MediaToolboxApp(
     onVideoToggle: () -> Unit,
     onFlip: () -> Unit,
     onOpenGallery: () -> Unit,
-    onCycleFlash: () -> Unit
+    onCycleFlash: () -> Unit,
+    onModeChanged: (CameraMode) -> Unit
 ) {
     var mode by rememberSaveable { mutableStateOf(CameraMode.PHOTO) }
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
         if (!hasCameraPermission) PermissionScreen(onRequestPermission)
         else CameraScreen(
-            mode, { mode = it }, onPreviewReady, onCapture, onVideoToggle, onFlip,
-            onOpenGallery, flashSetting, onCycleFlash, moreOpen, { moreOpen = it }
+            mode,
+            { selected ->
+                if (selected == CameraMode.SCAN || selected == CameraMode.QR) {
+                    onModeChanged(selected)
+                } else {
+                    mode = selected
+                    onModeChanged(selected)
+                }
+            },
+            onPreviewReady,
+            onCapture,
+            onVideoToggle,
+            onFlip,
+            onOpenGallery,
+            flashSetting,
+            onCycleFlash,
+            moreOpen,
+            { moreOpen = it }
         )
     }
 }
