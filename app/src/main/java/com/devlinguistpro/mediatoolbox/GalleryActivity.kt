@@ -104,20 +104,19 @@ class GalleryActivity : ComponentActivity() {
 private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, onBack: () -> Unit, onDelete: (Uri) -> Unit, onEdit: (Uri) -> Unit) {
     var tab by rememberSaveable { mutableStateOf(GalleryTab.PHOTOS) }
     var selectedAlbumId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var selectedIsVideo by rememberSaveable { mutableStateOf(false) }
     var refreshToken by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
 
     if (selectedUri != null) {
-        MediaViewer(
-            selectedUri!!,
-            selectedIsVideo,
-            { selectedUri = null },
-            { shareMedia(context, selectedUri!!) },
-            if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }),
-            { onDelete(selectedUri!!); selectedUri = null; refreshToken++ }
-        )
+        Column(Modifier.fillMaxSize().background(Color.Black)) {
+            Box(Modifier.weight(1f)) {
+                MediaViewer(selectedUri!!, selectedIsVideo, { selectedUri = null }, { shareMedia(context, selectedUri!!) }, if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }), { onDelete(selectedUri!!); selectedUri = null; refreshToken++ })
+            }
+            GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedUri = null }, gallerySelected = true)
+        }
         return
     }
 
@@ -127,7 +126,7 @@ private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, on
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
 
     LaunchedEffect(tab, selectedAlbumId, refreshToken) {
-        if (tab == GalleryTab.ALBUMS) {
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
             albums = withContext(Dispatchers.IO) { queryAlbums(context) }
         } else {
             media = withContext(Dispatchers.IO) { queryMedia(context, tab == GalleryTab.VIDEOS, selectedAlbumId) }
@@ -135,34 +134,28 @@ private fun GalleryApp(hasPermission: Boolean, requestPermission: () -> Unit, on
     }
 
     Column(Modifier.fillMaxSize().background(Color.Black)) {
-        // The camera/gallery switch is already the permanent bottom navigation.
-        // Do not duplicate a Gallery header/navigation control at the top.
         if (selectedAlbumId != null) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { selectedAlbumId = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }
-                Text(
-                    albums.firstOrNull { it.id == selectedAlbumId }?.name ?: "Album",
-                    color = Color.White,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
+                IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }
+                Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             }
         }
 
-        GalleryTabs(tab) { tab = it; selectedAlbumId = null }
+        if (selectedAlbumId == null) {
+            GalleryTabs(tab) { tab = it; selectedAlbumId = null; selectedAlbumName = null }
+        }
+
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
             AlbumGrid(albums) { album ->
                 selectedAlbumId = album.id
-                tab = if (album.containsVideo) GalleryTab.VIDEOS else GalleryTab.PHOTOS
+                selectedAlbumName = album.name
+                tab = GalleryTab.PHOTOS
             }
         } else {
             MediaGrid(media) { item -> selectedUri = item.uri; selectedIsVideo = item.isVideo }
         }
 
-        // This bottom navigation belongs to the overall camera/gallery app shell.
-        // It is intentionally supplied by MainActivity when GalleryActivity is replaced
-        // by a shared shell in the next UI pass; no duplicate top navigation is added here.
+        GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS }, gallerySelected = true)
     }
 }
 
@@ -207,11 +200,18 @@ private fun GalleryTabs(tab: GalleryTab, onSelected: (GalleryTab) -> Unit) {
 }
 
 @Composable
+private fun GalleryBottomNavigation(onCamera: () -> Unit, onGallery: () -> Unit, gallerySelected: Boolean) {
+    Row(Modifier.fillMaxWidth().background(Color.Black).height(58.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        Text("CAMERA", color = Color.White.copy(alpha = if (!gallerySelected) 1f else 0.55f), fontSize = 11.sp, fontWeight = if (!gallerySelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.clickable(onClick = onCamera).padding(horizontal = 20.dp, vertical = 10.dp))
+        Text("GALLERY", color = Color.White.copy(alpha = if (gallerySelected) 1f else 0.55f), fontSize = 11.sp, fontWeight = if (gallerySelected) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.clickable(onClick = onGallery).padding(horizontal = 20.dp, vertical = 10.dp))
+    }
+}
+
+@Composable
 private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().background(Color.Black).padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         Text("Allow photo and video access", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(12.dp))
-        Text("Media Toolbox uses Android's media library to show photos and videos already on your device. Your media is not uploaded.", color = Color.LightGray, fontSize = 15.sp)
+        Spacer(Modifier.height(12.dp)); Text("Media Toolbox uses Android's media library to show photos and videos already on your device. Your media is not uploaded.", color = Color.LightGray, fontSize = 15.sp)
         Spacer(Modifier.height(20.dp)); Button(onClick = requestPermission) { Text("Allow access") }
         Spacer(Modifier.height(8.dp)); Button(onClick = onBack) { Text("Back to camera") }
     }
@@ -232,9 +232,7 @@ private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit)
         items(albums, key = { it.id }) { album ->
             Column(Modifier.fillMaxWidth().clickable { onClick(album) }) {
                 MediaThumbnail(album.coverUri, album.name, Modifier.fillMaxWidth().aspectRatio(1f))
-                Spacer(Modifier.height(4.dp))
-                Text(album.name, color = Color.White, maxLines = 1)
-                Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
+                Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
             }
         }
     }
@@ -254,8 +252,7 @@ private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare:
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
+                Spacer(Modifier.weight(1f)); IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                 onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
