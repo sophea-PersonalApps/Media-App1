@@ -13,6 +13,7 @@
         android:label="Media Toolbox"
         android:supportsRtl="true"
         android:theme="@style/Theme.MediaToolbox">
+        <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".GalleryEditorActivity" android:exported="false" />
         <activity android:name=".GalleryActivity" android:exported="false" />
         <activity android:name=".QrScannerActivity" android:exported="false" />
