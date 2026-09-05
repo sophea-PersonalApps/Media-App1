@@ -1,7 +1,6 @@
 package com.devlinguistpro.mediatoolbox
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
@@ -78,6 +77,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 class ScannerActivity : ComponentActivity() {
     private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
@@ -90,6 +90,7 @@ class ScannerActivity : ComponentActivity() {
     private var selectedFolderName by mutableStateOf(MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER)
     private var cameraPermissionGranted by mutableStateOf(false)
     private var cameraBindRequested = false
+    private val savingPdf = AtomicBoolean(false)
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> cameraPermissionGranted = granted; if (granted) bindCamera() }
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -135,26 +136,88 @@ class ScannerActivity : ComponentActivity() {
         val capture = imageCapture ?: run { Toast.makeText(this, "Scanner camera is not ready", Toast.LENGTH_SHORT).show(); bindCamera(); return }
         val file = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
         capture.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), cameraExecutor, object : ImageCapture.OnImageSavedCallback {
-            override fun onImageSaved(result: ImageCapture.OutputFileResults) { runOnUiThread { if (file.exists() && file.length() > 0L) pages.add(file.absolutePath) else Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() } }
+            override fun onImageSaved(result: ImageCapture.OutputFileResults) { runOnUiThread { if (file.exists() && file.length() > 0L) pages.add(file.absolutePath) else { file.delete(); Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() } } }
             override fun onError(exception: ImageCaptureException) { file.delete(); runOnUiThread { Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() } }
         })
     }
-    private fun deletePage(index: Int) { if (index in pages.indices) File(pages.removeAt(index)).delete(); if (pages.isEmpty()) showingPreview = false }
-    private fun flipCamera() { lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK; bindCamera() }
+    private fun deletePage(index: Int) { if (savingPdf.get()) return; if (index in pages.indices) File(pages.removeAt(index)).delete(); if (pages.isEmpty()) showingPreview = false }
+    private fun flipCamera() { if (savingPdf.get()) return; lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK; bindCamera() }
     private fun currentFolderName(): String = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE).getString(MediaToolboxPrefs.KEY_SCANNER_FOLDER, null)?.let(Uri::parse)?.let(::folderName) ?: MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER
     private fun folderName(uri: Uri): String = try { DocumentsContract.getTreeDocumentId(uri)?.substringAfterLast(':')?.let(Uri::decode)?.takeIf { it.isNotBlank() } ?: "Chosen folder" } catch (_: Exception) { "Chosen folder" }
 
     private fun savePdf() {
+        if (!savingPdf.compareAndSet(false, true)) return
         val folder = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE).getString(MediaToolboxPrefs.KEY_SCANNER_FOLDER, null)?.let(Uri::parse)
-        if (folder == null) { Toast.makeText(this, "Choose a folder first", Toast.LENGTH_SHORT).show(); folderPicker.launch(null); return }
-        val pagePaths = pages.toList(); if (pagePaths.isEmpty()) return
-        Thread { var outputUri: Uri? = null; var document: PdfDocument? = null; try { if (!hasPersistedWriteAccess(folder)) throw IOException("Folder access is no longer available"); document = createPdf(pagePaths); val name = "Scan_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}.pdf"; outputUri = DocumentsContract.createDocument(contentResolver, folder, "application/pdf", name) ?: throw IOException("Could not create PDF in selected folder"); contentResolver.openOutputStream(outputUri, "w")?.use { output -> document.writeTo(output); output.flush() } ?: throw IOException("Could not open PDF for writing"); runOnUiThread { Toast.makeText(this, "PDF saved", Toast.LENGTH_SHORT).show(); clearPages(); finish() } } catch (e: Exception) { outputUri?.let { runCatching { contentResolver.delete(it, null, null) } }; runOnUiThread { Toast.makeText(this, "Could not save PDF: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show() } } finally { document?.close() } }.start()
+        if (folder == null) { savingPdf.set(false); Toast.makeText(this, "Choose a folder first", Toast.LENGTH_SHORT).show(); folderPicker.launch(null); return }
+        val pagePaths = pages.toList()
+        if (pagePaths.isEmpty()) { savingPdf.set(false); return }
+        Thread {
+            var outputUri: Uri? = null
+            var document: PdfDocument? = null
+            try {
+                if (!hasPersistedWriteAccess(folder)) throw IOException("Folder access is no longer available")
+                pagePaths.forEachIndexed { index, path ->
+                    val file = File(path)
+                    if (!file.isFile || file.length() == 0L) throw IOException("Scan page ${index + 1} is unavailable")
+                }
+                document = createPdf(pagePaths)
+                val name = "Scan_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.pdf"
+                outputUri = DocumentsContract.createDocument(contentResolver, folder, "application/pdf", name)
+                    ?: throw IOException("Could not create PDF in selected folder")
+                contentResolver.openOutputStream(outputUri, "w")?.use { output ->
+                    document!!.writeTo(output)
+                    output.flush()
+                } ?: throw IOException("Could not open PDF for writing")
+                runOnUiThread {
+                    Toast.makeText(this, "PDF saved", Toast.LENGTH_SHORT).show()
+                    clearPages()
+                    finish()
+                }
+            } catch (e: Exception) {
+                outputUri?.let { runCatching { contentResolver.delete(it, null, null) } }
+                runOnUiThread { Toast.makeText(this, "Could not save PDF: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
+            } finally {
+                document?.close()
+                savingPdf.set(false)
+            }
+        }.start()
     }
     private fun hasPersistedWriteAccess(uri: Uri): Boolean = contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
 
     private fun createPdf(paths: List<String>): PdfDocument {
-        val document = PdfDocument(); try { paths.forEachIndexed { index, path -> val bitmap = BitmapFactory.decodeFile(path) ?: throw IOException("Unable to read scan page ${index + 1}"); try { val maxSide = 2200; val scale = minOf(1f, maxSide.toFloat() / maxOf(bitmap.width, bitmap.height).toFloat()); val width = (bitmap.width * scale).toInt().coerceAtLeast(1); val height = (bitmap.height * scale).toInt().coerceAtLeast(1); val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create()); try { page.canvas.drawColor(Color.WHITE); page.canvas.drawBitmap(bitmap, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)) } finally { document.finishPage(page) } } finally { bitmap.recycle() } }; return document } catch (e: Exception) { document.close(); throw e }
+        val document = PdfDocument()
+        try {
+            paths.forEachIndexed { index, path ->
+                val bitmap = decodePdfBitmap(File(path), 2200) ?: throw IOException("Unable to read scan page ${index + 1}")
+                try {
+                    val maxPageSide = 2200f
+                    val scale = minOf(1f, maxPageSide / maxOf(bitmap.width, bitmap.height).toFloat())
+                    val width = (bitmap.width * scale).toInt().coerceIn(1, 2200)
+                    val height = (bitmap.height * scale).toInt().coerceIn(1, 2200)
+                    val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
+                    try {
+                        page.canvas.drawColor(Color.WHITE)
+                        page.canvas.drawBitmap(bitmap, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                    } finally { document.finishPage(page) }
+                } finally { bitmap.recycle() }
+            }
+            if (paths.isEmpty()) throw IOException("No scan pages")
+            return document
+        } catch (e: Exception) { document.close(); throw e }
     }
+
+    private fun decodePdfBitmap(file: File, maxSide: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
+        return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        })
+    }
+
     private fun clearPages() { pages.forEach { File(it).delete() }; pages.clear() }
     override fun onDestroy() { cameraProvider?.unbindAll(); cameraExecutor.shutdown(); if (isFinishing) clearPages(); super.onDestroy() }
 }
