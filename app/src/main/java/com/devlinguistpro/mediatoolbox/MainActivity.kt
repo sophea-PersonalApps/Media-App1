@@ -42,7 +42,6 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -245,36 +244,34 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        val mediaStoreOutput = if (Build.VERSION.SDK_INT >= 29) {
-            ImageCapture.OutputFileOptions.Builder(contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
-        } else {
-            null
-        }
+        val output = ImageCapture.OutputFileOptions.Builder(
+            contentResolver,
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            values
+        ).build()
 
-        if (mediaStoreOutput != null) {
-            capture.takePicture(mediaStoreOutput, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                    val uri = result.savedUri
-                    if (uri == null) {
-                        runOnUiThread { Toast.makeText(this@MainActivity, "Photo was captured but could not be saved", Toast.LENGTH_LONG).show() }
-                        return
-                    }
-                    try {
+        capture.takePicture(output, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                val uri = result.savedUri
+                if (uri == null) {
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Photo was captured but could not be saved", Toast.LENGTH_LONG).show() }
+                    return
+                }
+                try {
+                    if (Build.VERSION.SDK_INT >= 29) {
                         contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
-                        runOnUiThread { Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show() }
-                    } catch (_: Exception) {
-                        contentResolver.delete(uri, null, null)
-                        runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() }
                     }
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show() }
+                } catch (_: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() }
                 }
+            }
 
-                override fun onError(exception: ImageCaptureException) {
-                    runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_LONG).show() }
-                }
-            })
-        } else {
-            Toast.makeText(this, "Camera saving requires a newer Android version", Toast.LENGTH_LONG).show()
-        }
+            override fun onError(exception: ImageCaptureException) {
+                runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_LONG).show() }
+            }
+        })
     }
 
     private fun toggleVideoRecording() {
