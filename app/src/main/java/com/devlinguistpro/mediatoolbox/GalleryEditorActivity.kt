@@ -1,4 +1,4 @@
-package com.devlinguistPro.mediatoolbox
+package com.devlinguistpro.mediatoolbox
 
 import android.content.ContentValues
 import android.graphics.Bitmap
@@ -91,17 +91,14 @@ class GalleryEditorActivity : ComponentActivity() {
                 }
                 outputUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
                     ?: error("Could not create image")
-
                 resolver.openOutputStream(outputUri)?.use { output ->
                     if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)) error("Could not encode image")
                 } ?: error("Could not open image")
-
                 if (Build.VERSION.SDK_INT >= 29) {
                     resolver.update(outputUri, ContentValues().apply {
                         put(MediaStore.Images.Media.IS_PENDING, 0)
                     }, null, null)
                 }
-
                 runOnUiThread {
                     Toast.makeText(this, "Edited photo saved", Toast.LENGTH_SHORT).show()
                     finish()
@@ -156,7 +153,6 @@ private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Un
                     Icon(Icons.Default.Check, "Save", tint = Color.White)
                 }
             }
-
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 when {
                     preview != null -> Image(preview.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
@@ -164,7 +160,6 @@ private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Un
                     else -> Text("Photo could not be loaded", color = Color.LightGray)
                 }
             }
-
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text("Brightness", color = Color.White)
                 Slider(value = brightness, onValueChange = { brightness = it }, valueRange = -1f..1f)
