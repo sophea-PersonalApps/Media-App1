@@ -101,11 +101,28 @@ class ScannerActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState); cameraPermissionGranted = hasCameraPermission(); window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON); selectedFolderName = currentFolderName()
+        super.onCreate(savedInstanceState)
+        cameraPermissionGranted = hasCameraPermission()
+        applyKeepScreenOnPreference()
+        selectedFolderName = currentFolderName()
         setContent { MaterialTheme { ScannerApp(pages, cameraPermissionGranted, showingPreview, selectedFolderName, { cameraPermission.launch(Manifest.permission.CAMERA) }, { previewView = it; cameraBindRequested = true; if (cameraPermissionGranted && !showingPreview) bindCamera() }, ::capturePage, ::deletePage, { if (pages.isNotEmpty()) { cameraProvider?.unbindAll(); showingPreview = true } }, ::finish, { showingPreview = false; cameraBindRequested = true; if (cameraPermissionGranted) bindCamera() }, ::flipCamera, { folderPicker.launch(null) }, ::savePdf) } }
     }
 
-    override fun onResume() { super.onResume(); val granted = hasCameraPermission(); if (cameraPermissionGranted != granted) cameraPermissionGranted = granted; if (granted && cameraBindRequested && !showingPreview) bindCamera() }
+    override fun onResume() {
+        super.onResume()
+        applyKeepScreenOnPreference()
+        val granted = hasCameraPermission()
+        if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
+        if (granted && cameraBindRequested && !showingPreview) bindCamera()
+    }
+
+    private fun applyKeepScreenOnPreference() {
+        val keepOn = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
+            .getBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, true)
+        if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
     private fun hasCameraPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
     private fun bindCamera() {
