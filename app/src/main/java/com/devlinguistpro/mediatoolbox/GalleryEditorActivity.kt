@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -149,10 +148,13 @@ private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Un
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
                 Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                IconButton(onClick = { preview?.let(onSave) }, enabled = preview != null) {
-                    Icon(Icons.Default.Check, "Save", tint = Color.White)
+                Button(onClick = { preview?.let(onSave) }, enabled = preview != null) {
+                    Icon(Icons.Default.Check, "Save")
+                    Spacer(Modifier.size(5.dp))
+                    Text("Save")
                 }
             }
+
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 when {
                     preview != null -> Image(preview.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
@@ -160,6 +162,7 @@ private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Un
                     else -> Text("Photo could not be loaded", color = Color.LightGray)
                 }
             }
+
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text("Brightness", color = Color.White)
                 Slider(value = brightness, onValueChange = { brightness = it }, valueRange = -1f..1f)
@@ -181,6 +184,18 @@ private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Un
                         Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V")
                     }
                 }
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = {
+                        brightness = 0f
+                        contrast = 1f
+                        saturation = 1f
+                        rotation = 0f
+                        flipHorizontal = false
+                        flipVertical = false
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Reset edits") }
             }
         }
     }
