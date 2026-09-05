@@ -21,6 +21,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -460,13 +462,13 @@ private fun VideoPlayer(uri: Uri) {
     val videoView = remember(uri) {
         VideoView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            setMediaController(MediaController(context).also { it.setAnchorView(this) })
+            setMediaController(MediaController(context).also { controller -> controller.setAnchorView(this) })
             setOnPreparedListener { player ->
                 player.isLooping = false
                 start()
             }
-            setOnErrorListener { _, _, _ ->
-                Toast.makeText(context, "Could not play video", Toast.LENGTH_SHORT).show()
+            setOnErrorListener { _, what, extra ->
+                Toast.makeText(context, "Could not play video ($what/$extra)", Toast.LENGTH_SHORT).show()
                 true
             }
         }
@@ -480,12 +482,14 @@ private fun VideoPlayer(uri: Uri) {
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
-        factory = { videoView },
+        factory = { view ->
+            view.setVideoURI(uri)
+            view
+        },
         update = { view ->
             if (view.tag != uri.toString()) {
                 view.tag = uri.toString()
                 view.setVideoURI(uri)
-                view.start()
             }
         }
     )
