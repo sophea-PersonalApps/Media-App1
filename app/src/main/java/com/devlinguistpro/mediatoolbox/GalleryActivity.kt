@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.util.LruCache
 import android.util.Size
 import android.view.ViewGroup
 import android.widget.MediaController
@@ -62,6 +63,22 @@ private data class MediaAccess(val images: Boolean, val videos: Boolean) {
 }
 private data class MediaItem(val uri: Uri, val name: String, val dateAdded: Long, val isVideo: Boolean, val bucketId: String?, val bucketName: String?)
 private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val coverIsVideo: Boolean)
+
+private object ThumbnailMemoryCache {
+    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+    private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
+
+    fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get(cacheKey(uri, isVideo))
+
+    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap {
+        cache.put(cacheKey(uri, isVideo), bitmap)
+        return bitmap
+    }
+
+    private fun cacheKey(uri: Uri, isVideo: Boolean): String = "$isVideo|$uri"
+}
 
 class GalleryActivity : ComponentActivity() {
     private var mediaAccess by mutableStateOf(MediaAccess(false, false))
@@ -416,9 +433,11 @@ private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit)
 @Composable
 private fun MediaThumbnail(uri: Uri, description: String, isVideo: Boolean, modifier: Modifier, onClick: () -> Unit = {}) {
     val context = LocalContext.current
-    var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(uri) {
-        bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) }
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.get(uri, isVideo)) }
+    LaunchedEffect(uri, isVideo) {
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) }
+        }
     }
     Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
@@ -500,15 +519,21 @@ private fun shareMedia(context: Context, uri: Uri) {
     }, "Share media"))
 }
 
-private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? = runCatching {
-    if (Build.VERSION.SDK_INT >= 29) {
-        context.contentResolver.loadThumbnail(uri, Size(360, 360), null)
-    } else {
-        val kind = if (isVideo) MediaStore.Video.Thumbnails.MINI_KIND else MediaStore.Images.Thumbnails.MINI_KIND
-        if (isVideo) MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
-        else MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
-    }
-}.getOrNull()
+private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? {
+    ThumbnailMemoryCache.get(uri, isVideo)?.let { return it }
+
+    val bitmap = runCatching {
+        if (Build.VERSION.SDK_INT >= 29) {
+            context.contentResolver.loadThumbnail(uri, Size(360, 360), null)
+        } else {
+            val kind = if (isVideo) MediaStore.Video.Thumbnails.MINI_KIND else MediaStore.Images.Thumbnails.MINI_KIND
+            if (isVideo) MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
+            else MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null)
+        }
+    }.getOrNull()
+
+    return bitmap?.let { ThumbnailMemoryCache.put(uri, isVideo, it) }
+}
 
 private fun loadFullImage(context: Context, uri: Uri): Bitmap? = runCatching {
     context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
