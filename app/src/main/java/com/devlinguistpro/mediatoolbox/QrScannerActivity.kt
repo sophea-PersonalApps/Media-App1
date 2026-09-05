@@ -81,16 +81,19 @@ class QrScannerActivity : ComponentActivity() {
     private var result by mutableStateOf<String?>(null)
     private var cameraPermissionGranted by mutableStateOf(false)
     private val resultLocked = AtomicBoolean(false)
+    private val bindingInProgress = AtomicBoolean(false)
+    private var activeAnalysis: ImageAnalysis? = null
+    private var isStopping = false
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
-        if (granted) bindCamera()
+        if (granted && !isStopping) bindCamera()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cameraPermissionGranted = hasCameraPermission()
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        applyKeepScreenOnPreference()
         setContent {
             MaterialTheme {
                 QrScannerScreen(
@@ -116,9 +119,25 @@ class QrScannerActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isStopping = false
+        applyKeepScreenOnPreference()
         val granted = hasCameraPermission()
         if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
         if (granted && previewView != null) bindCamera()
+    }
+
+    override fun onStop() {
+        isStopping = true
+        cameraProvider?.unbindAll()
+        activeAnalysis = null
+        super.onStop()
+    }
+
+    private fun applyKeepScreenOnPreference() {
+        val keepOn = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
+            .getBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, true)
+        if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun hasCameraPermission(): Boolean =
@@ -126,19 +145,25 @@ class QrScannerActivity : ComponentActivity() {
 
     private fun bindCamera() {
         val view = previewView ?: return
-        if (!hasCameraPermission()) return
+        if (!hasCameraPermission() || isStopping) return
+        if (!bindingInProgress.compareAndSet(false, true)) return
+
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
+                if (isStopping || isFinishing) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
+                provider.unbindAll()
+
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
+                activeAnalysis = analysis
 
                 analysis.setAnalyzer(cameraExecutor) { imageProxy ->
-                    if (resultLocked.get()) {
+                    if (resultLocked.get() || isStopping) {
                         imageProxy.close()
                         return@setAnalyzer
                     }
@@ -150,32 +175,38 @@ class QrScannerActivity : ComponentActivity() {
                     val image = InputImage.fromMediaImage(mediaImage, imageProxy.imageInfo.rotationDegrees)
                     barcodeScanner.process(image)
                         .addOnSuccessListener { barcodes ->
+                            if (resultLocked.get() || isStopping) return@addOnSuccessListener
                             val value = barcodes.firstOrNull { !it.rawValue.isNullOrBlank() }?.rawValue
                             if (!value.isNullOrBlank() && resultLocked.compareAndSet(false, true)) {
-                                result = value
+                                runOnUiThread { if (!isStopping && !isFinishing) result = value }
                             }
                         }
                         .addOnCompleteListener { imageProxy.close() }
                 }
 
                 val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
-                provider.unbindAll()
                 provider.bindToLifecycle(this, selector, preview, analysis)
             } catch (_: Exception) {
-                runOnUiThread {
-                    Toast.makeText(this, "QR scanner camera could not start", Toast.LENGTH_SHORT).show()
+                activeAnalysis = null
+                if (!isStopping && !isFinishing) {
+                    runOnUiThread {
+                        Toast.makeText(this, "QR scanner camera could not start", Toast.LENGTH_SHORT).show()
+                    }
                 }
+            } finally {
+                bindingInProgress.set(false)
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun flipCamera() {
-        if (result != null) return
-        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
+        if (result != null || isStopping || bindingInProgress.get()) return
+        val nextLens = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
             CameraSelector.LENS_FACING_BACK
         }
+        lensFacing = nextLens
         bindCamera()
     }
 
@@ -202,7 +233,9 @@ class QrScannerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        isStopping = true
         cameraProvider?.unbindAll()
+        activeAnalysis = null
         barcodeScanner.close()
         cameraExecutor.shutdown()
         super.onDestroy()
