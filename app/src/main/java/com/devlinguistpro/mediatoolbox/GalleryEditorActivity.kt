@@ -1,4 +1,4 @@
-package com.devlinguistpro.mediatoolbox
+package com.devlinguistPro.mediatoolbox
 
 import android.content.ContentValues
 import android.graphics.Bitmap
@@ -27,7 +27,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
@@ -60,44 +59,73 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 class GalleryEditorActivity : ComponentActivity() {
+    private val saving = AtomicBoolean(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val uri = intent.getParcelableExtra<Uri>(EXTRA_URI)
+        if (uri == null) {
+            Toast.makeText(this, "Photo could not be opened", Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
         setContent { MaterialTheme { GalleryEditor(uri, ::saveEdited, ::finish) } }
     }
 
     private fun saveEdited(bitmap: Bitmap) {
+        if (!saving.compareAndSet(false, true)) return
         Thread {
+            var outputUri: Uri? = null
             try {
                 val resolver = contentResolver
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${System.currentTimeMillis()}.jpg")
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-                    if (Build.VERSION.SDK_INT >= 29) put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Media Toolbox")
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/Media Toolbox")
+                        put(MediaStore.Images.Media.IS_PENDING, 1)
+                    }
                 }
-                val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: error("Could not create image")
-                try {
-                    resolver.openOutputStream(uri)?.use { output ->
-                        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)) error("Could not encode image")
-                    } ?: error("Could not open image")
-                } catch (e: Exception) {
-                    resolver.delete(uri, null, null)
-                    throw e
+                outputUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("Could not create image")
+
+                resolver.openOutputStream(outputUri)?.use { output ->
+                    if (!bitmap.compress(Bitmap.CompressFormat.JPEG, 95, output)) error("Could not encode image")
+                } ?: error("Could not open image")
+
+                if (Build.VERSION.SDK_INT >= 29) {
+                    resolver.update(outputUri, ContentValues().apply {
+                        put(MediaStore.Images.Media.IS_PENDING, 0)
+                    }, null, null)
                 }
-                runOnUiThread { Toast.makeText(this, "Edited photo saved", Toast.LENGTH_SHORT).show(); finish() }
+
+                runOnUiThread {
+                    Toast.makeText(this, "Edited photo saved", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
             } catch (_: Exception) {
-                runOnUiThread { Toast.makeText(this, "Could not save edited photo", Toast.LENGTH_LONG).show() }
+                outputUri?.let { runCatching { resolverDelete(it) } }
+                runOnUiThread {
+                    Toast.makeText(this, "Could not save edited photo", Toast.LENGTH_LONG).show()
+                }
+            } finally {
+                saving.set(false)
             }
         }.start()
+    }
+
+    private fun resolverDelete(uri: Uri) {
+        contentResolver.delete(uri, null, null)
     }
 
     companion object { const val EXTRA_URI = "source_uri" }
 }
 
 @Composable
-private fun GalleryEditor(uri: Uri?, onSave: (Bitmap) -> Unit, onCancel: () -> Unit) {
+private fun GalleryEditor(uri: Uri, onSave: (Bitmap) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     var original by remember { mutableStateOf<Bitmap?>(null) }
     var brightness by remember { mutableFloatStateOf(0f) }
@@ -109,7 +137,9 @@ private fun GalleryEditor(uri: Uri?, onSave: (Bitmap) -> Unit, onCancel: () -> U
 
     LaunchedEffect(uri) {
         original = withContext(Dispatchers.IO) {
-            uri?.let { runCatching { context.contentResolver.openInputStream(it)?.use(BitmapFactory::decodeStream) }.getOrNull() }
+            runCatching {
+                context.contentResolver.openInputStream(uri)?.use(BitmapFactory::decodeStream)
+            }.getOrNull()
         }
     }
 
@@ -121,14 +151,18 @@ private fun GalleryEditor(uri: Uri?, onSave: (Bitmap) -> Unit, onCancel: () -> U
         Column(Modifier.fillMaxSize().padding(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
-                Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.fillMaxWidth().weight(1f))
+                Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 IconButton(onClick = { preview?.let(onSave) }, enabled = preview != null) {
                     Icon(Icons.Default.Check, "Save", tint = Color.White)
                 }
             }
 
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                preview?.let { Image(it.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+                when {
+                    preview != null -> Image(preview.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                    original == null -> Text("Loading photo…", color = Color.LightGray)
+                    else -> Text("Photo could not be loaded", color = Color.LightGray)
+                }
             }
 
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
@@ -146,10 +180,10 @@ private fun GalleryEditor(uri: Uri?, onSave: (Bitmap) -> Unit, onCancel: () -> U
                         Icon(Icons.Default.RotateRight, "Rotate right"); Spacer(Modifier.size(4.dp)); Text("Right")
                     }
                     Button(onClick = { flipHorizontal = !flipHorizontal }) {
-                        Icon(Icons.Default.Flip, "Flip horizontal"); Text("H")
+                        Icon(Icons.Default.Flip, "Flip horizontal"); Spacer(Modifier.size(4.dp)); Text("H")
                     }
                     Button(onClick = { flipVertical = !flipVertical }) {
-                        Icon(Icons.Default.Flip, "Flip vertical"); Text("V")
+                        Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V")
                     }
                 }
             }
