@@ -60,7 +60,6 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import java.util.concurrent.AtomicBoolean
 
 class GalleryEditorActivity : ComponentActivity() {
     private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
