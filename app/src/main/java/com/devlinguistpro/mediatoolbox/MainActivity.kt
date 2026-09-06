@@ -430,7 +430,7 @@ private fun CameraScreen(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
-            factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
+            factory = { PreviewView(context).apply { scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
             modifier = Modifier.fillMaxSize()
         )
         if (showCaptureFlash && mode == CameraMode.PHOTO) {
