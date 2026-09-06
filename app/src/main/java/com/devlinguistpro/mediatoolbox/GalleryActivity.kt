@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -34,8 +35,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -69,14 +72,8 @@ private object ThumbnailMemoryCache {
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
-
     fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get(cacheKey(uri, isVideo))
-
-    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap {
-        cache.put(cacheKey(uri, isVideo), bitmap)
-        return bitmap
-    }
-
+    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put(cacheKey(uri, isVideo), bitmap); return bitmap }
     private fun cacheKey(uri: Uri, isVideo: Boolean): String = "$isVideo|$uri"
 }
 
@@ -87,7 +84,6 @@ class GalleryActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         mediaAccess = currentMediaAccess()
     }
-
     private val deleteLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         val callback = pendingDeleteResult
         pendingDeleteResult = null
@@ -99,13 +95,7 @@ class GalleryActivity : ComponentActivity() {
         mediaAccess = currentMediaAccess()
         setContent {
             MaterialTheme {
-                GalleryApp(
-                    mediaAccess,
-                    ::requestMediaPermission,
-                    ::finish,
-                    ::deleteMedia,
-                    ::openEditor
-                )
+                GalleryApp(mediaAccess, ::requestMediaPermission, ::finish, ::deleteMedia, ::openEditor)
             }
         }
     }
@@ -121,30 +111,19 @@ class GalleryActivity : ComponentActivity() {
             val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
             return MediaAccess(granted, granted)
         }
-
         val images = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
         val videos = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-
         if (Build.VERSION.SDK_INT >= 34) {
             val selected = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
-            if (selected) return MediaAccess(images = true, videos = true)
+            if (selected) return MediaAccess(true, true)
         }
-
         return MediaAccess(images, videos)
     }
 
     private fun requestMediaPermission() {
         when {
-            Build.VERSION.SDK_INT >= 34 -> permissionLauncher.launch(
-                arrayOf(
-                    Manifest.permission.READ_MEDIA_IMAGES,
-                    Manifest.permission.READ_MEDIA_VIDEO,
-                    Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-                )
-            )
-            Build.VERSION.SDK_INT >= 33 -> permissionLauncher.launch(
-                arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
-            )
+            Build.VERSION.SDK_INT >= 34 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
+            Build.VERSION.SDK_INT >= 33 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO))
             else -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE))
         }
     }
@@ -187,22 +166,10 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
     if (selectedUri != null) {
         Column(Modifier.fillMaxSize().background(Color.Black)) {
             Box(Modifier.weight(1f)) {
-                MediaViewer(
-                    selectedUri!!,
-                    selectedIsVideo,
-                    { selectedUri = null },
-                    { shareMedia(context, selectedUri!!) },
-                    if (selectedIsVideo) null else ({ onEdit(selectedUri!!) }),
-                    {
-                        val uriBeingDeleted = selectedUri!!
-                        onDelete(uriBeingDeleted) { deleted ->
-                            if (deleted) {
-                                selectedUri = null
-                                refreshToken++
-                            }
-                        }
-                    }
-                )
+                MediaViewer(selectedUri!!, selectedIsVideo, { selectedUri = null }, { shareMedia(context, selectedUri!!) }, if (selectedIsVideo) null else ({ onEdit(selectedUri!!) })) {
+                    val uriBeingDeleted = selectedUri!!
+                    onDelete(uriBeingDeleted) { deleted -> if (deleted) { selectedUri = null; refreshToken++ } }
+                }
             }
             GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedUri = null }, gallerySelected = true)
         }
@@ -236,52 +203,28 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         if (selectedAlbumId != null) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) {
-                    Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White)
-                }
+                IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }
                 Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             }
         }
-
-        if (selectedAlbumId == null) {
-            GalleryTabs(tab, access) { tab = it; selectedAlbumId = null; selectedAlbumName = null }
-        }
-
+        if (selectedAlbumId == null) GalleryTabs(tab, access) { tab = it; selectedAlbumId = null; selectedAlbumName = null }
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
-            AlbumGrid(albums) { album ->
-                selectedAlbumId = album.id
-                selectedAlbumName = album.name
-            }
+            AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }
         } else {
             val unavailable = (tab == GalleryTab.PHOTOS && !access.images) || (tab == GalleryTab.VIDEOS && !access.videos)
-            if (unavailable && selectedAlbumId == null) {
-                MissingMediaPermission(photos = tab == GalleryTab.PHOTOS, requestPermission = requestPermission)
-            } else {
-                MediaGrid(media) { item -> selectedUri = item.uri; selectedIsVideo = item.isVideo }
-            }
+            if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
+            else MediaGrid(media) { item -> selectedUri = item.uri; selectedIsVideo = item.isVideo }
         }
-
-        GalleryBottomNavigation(
-            onCamera = onBack,
-            onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS },
-            gallerySelected = true
-        )
+        GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS }, gallerySelected = true)
     }
 }
 
 private fun queryMedia(context: Context, videosOnly: Boolean, bucketId: String? = null): List<MediaItem> {
     val collection = mediaCollection(videosOnly)
-    val projection = arrayOf(
-        MediaStore.MediaColumns._ID,
-        MediaStore.MediaColumns.DISPLAY_NAME,
-        MediaStore.MediaColumns.DATE_ADDED,
-        MediaStore.MediaColumns.BUCKET_ID,
-        MediaStore.MediaColumns.BUCKET_DISPLAY_NAME
-    )
+    val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_ADDED, MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
     val selection = bucketId?.let { "${MediaStore.MediaColumns.BUCKET_ID} = ?" }
     val args = bucketId?.let { arrayOf(it) }
     val result = ArrayList<MediaItem>()
-
     runCatching {
         context.contentResolver.query(collection, projection, selection, args, "${MediaStore.MediaColumns.DATE_ADDED} DESC")?.use { cursor ->
             val id = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
@@ -290,18 +233,10 @@ private fun queryMedia(context: Context, videosOnly: Boolean, bucketId: String? 
             val bucket = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_ID)
             val bucketName = cursor.getColumnIndex(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
             while (cursor.moveToNext()) {
-                result += MediaItem(
-                    ContentUris.withAppendedId(collection, cursor.getLong(id)),
-                    cursor.getString(name) ?: "",
-                    cursor.getLong(date),
-                    videosOnly,
-                    if (bucket >= 0) cursor.getString(bucket) else null,
-                    if (bucketName >= 0) cursor.getString(bucketName) else null
-                )
+                result += MediaItem(ContentUris.withAppendedId(collection, cursor.getLong(id)), cursor.getString(name) ?: "", cursor.getLong(date), videosOnly, if (bucket >= 0) cursor.getString(bucket) else null, if (bucketName >= 0) cursor.getString(bucketName) else null)
             }
         }
     }
-
     return result
 }
 
@@ -317,11 +252,7 @@ private fun queryAlbums(context: Context, access: MediaAccess): List<Album> {
     val allItems = ArrayList<MediaItem>()
     if (access.images) allItems += queryMedia(context, false)
     if (access.videos) allItems += queryMedia(context, true)
-
-    allItems.forEach { item ->
-        item.bucketId?.let { grouped.getOrPut(it) { mutableListOf() }.add(item) }
-    }
-
+    allItems.forEach { item -> item.bucketId?.let { grouped.getOrPut(it) { mutableListOf() }.add(item) } }
     return grouped.mapNotNull { (id, items) ->
         val cover = items.maxByOrNull { it.dateAdded } ?: return@mapNotNull null
         Album(id, cover.bucketName?.takeIf(String::isNotBlank) ?: "Unknown", items.size, cover.uri, cover.isVideo)
@@ -337,17 +268,8 @@ private fun GalleryTabs(tab: GalleryTab, access: MediaAccess, onSelected: (Galle
     Row(Modifier.fillMaxWidth().background(Color.Black).padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
         GalleryTab.values().forEach { value ->
             val label = value.name.lowercase().replaceFirstChar { it.uppercase() }
-            val available = when (value) {
-                GalleryTab.PHOTOS -> access.images
-                GalleryTab.VIDEOS -> access.videos
-                GalleryTab.ALBUMS -> access.any
-            }
-            Text(
-                label,
-                color = Color.White.copy(alpha = if (tab == value) 1f else if (available) 0.55f else 0.3f),
-                fontWeight = if (tab == value) FontWeight.Bold else FontWeight.Normal,
-                modifier = Modifier.clickable { onSelected(value) }.padding(horizontal = 20.dp, vertical = 8.dp)
-            )
+            val available = when (value) { GalleryTab.PHOTOS -> access.images; GalleryTab.VIDEOS -> access.videos; GalleryTab.ALBUMS -> access.any }
+            Text(label, color = Color.White.copy(alpha = if (tab == value) 1f else if (available) 0.55f else 0.3f), fontWeight = if (tab == value) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.clickable { onSelected(value) }.padding(horizontal = 20.dp, vertical = 8.dp))
         }
     }
 }
@@ -366,65 +288,34 @@ private fun GalleryPermissionScreen(requestPermission: () -> Unit, onBack: () ->
         Text("Allow photo and video access", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(12.dp))
         Text("Media Toolbox uses Android's media library to show photos and videos already on your device. Your media is not uploaded.", color = Color.LightGray, fontSize = 15.sp)
-        Spacer(Modifier.height(20.dp))
-        Button(onClick = requestPermission) { Text("Allow access") }
-        Spacer(Modifier.height(8.dp))
-        Button(onClick = onBack) { Text("Back to camera") }
+        Spacer(Modifier.height(20.dp)); Button(onClick = requestPermission) { Text("Allow access") }; Spacer(Modifier.height(8.dp)); Button(onClick = onBack) { Text("Back to camera") }
     }
 }
 
 @Composable
 private fun ColumnScope.MissingMediaPermission(photos: Boolean, requestPermission: () -> Unit) {
-    Column(
-        Modifier.fillMaxWidth().weight(1f).padding(28.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            if (photos) "Photo access is not enabled" else "Video access is not enabled",
-            color = Color.White,
-            fontSize = 19.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = requestPermission) { Text("Change media access") }
+    Column(Modifier.fillMaxWidth().weight(1f).padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(if (photos) "Photo access is not enabled" else "Video access is not enabled", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(12.dp)); Button(onClick = requestPermission) { Text("Change media access") }
     }
 }
 
 @Composable
 private fun ColumnScope.MediaGrid(items: List<MediaItem>, onClick: (MediaItem) -> Unit) {
-    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-        Text("No media found", color = Color.LightGray)
-    } else LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 105.dp),
-        modifier = Modifier.fillMaxWidth().weight(1f),
-        contentPadding = PaddingValues(2.dp),
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        items(items, key = { it.uri.toString() }) { item ->
-            MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f)) { onClick(item) }
-        }
+    if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
+    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f)) { onClick(item) } }
     }
 }
 
 @Composable
 private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) {
-    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-        Text("No albums found", color = Color.LightGray)
-    } else LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 150.dp),
-        modifier = Modifier.fillMaxWidth().weight(1f),
-        contentPadding = PaddingValues(8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) }
+    else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.id }) { album ->
             Column(Modifier.fillMaxWidth().clickable { onClick(album) }) {
                 MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f))
-                Spacer(Modifier.height(4.dp))
-                Text(album.name, color = Color.White, maxLines = 1)
-                Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
+                Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp)
             }
         }
     }
@@ -435,17 +326,12 @@ private fun MediaThumbnail(uri: Uri, description: String, isVideo: Boolean, modi
     val context = LocalContext.current
     var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.get(uri, isVideo)) }
     LaunchedEffect(uri, isVideo) {
-        if (bitmap == null) {
-            bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) }
-        }
+        if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) }
     }
     Box(modifier.background(Color.DarkGray).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-        if (isVideo) {
-            Box(Modifier.align(Alignment.BottomStart).padding(6.dp).background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) {
-                Text("VIDEO", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
-            }
-        }
+        if (bitmap == null && isVideo) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
+        if (isVideo) Box(Modifier.align(Alignment.BottomStart).padding(6.dp).background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) { Text("VIDEO", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold) }
     }
 }
 
@@ -455,14 +341,12 @@ private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare:
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
+                Spacer(Modifier.weight(1f)); IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                 onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
                 IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isVideo) VideoPlayer(uri)
-                else {
+                if (isVideo) VideoPlayer(uri) else {
                     val context = LocalContext.current
                     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
                     LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
@@ -476,40 +360,53 @@ private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare:
 @Composable
 private fun VideoPlayer(uri: Uri) {
     val context = LocalContext.current
+    var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
+    var retryKey by remember(uri) { mutableIntStateOf(0) }
     val videoView = remember(uri) {
         VideoView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            tag = uri.toString()
-            setMediaController(MediaController(context).also { controller -> controller.setAnchorView(this) })
-            setOnPreparedListener { player ->
-                player.isLooping = false
-                start()
-            }
-            setOnErrorListener { _, what, extra ->
-                Toast.makeText(context, "Could not play video ($what/$extra)", Toast.LENGTH_SHORT).show()
-                true
-            }
-            setVideoURI(uri)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setMediaController(MediaController(context).also { it.setAnchorView(this) })
         }
+    }
+
+    LaunchedEffect(uri, retryKey) {
+        state = VideoLoadState.LOADING
+        videoView.setOnPreparedListener { player ->
+            player.isLooping = false
+            state = VideoLoadState.READY
+            videoView.requestFocus()
+            player.start()
+        }
+        videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }
+        videoView.setOnErrorListener { _, _, _ ->
+            state = VideoLoadState.ERROR
+            true
+        }
+        videoView.setVideoURI(uri)
+        videoView.requestFocus()
     }
 
     DisposableEffect(videoView) {
-        onDispose {
-            runCatching { videoView.stopPlayback() }
-        }
+        onDispose { runCatching { videoView.stopPlayback() } }
     }
 
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = { videoView },
-        update = { view ->
-            if (view.tag != uri.toString()) {
-                view.tag = uri.toString()
-                view.setVideoURI(uri)
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })
+        when (state) {
+            VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White)
+            VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
+                Text("Could not play this video", color = Color.White, fontSize = 16.sp)
+                Spacer(Modifier.height(10.dp))
+                Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") }
             }
+            VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit
         }
-    )
+    }
 }
+
+private enum class VideoLoadState { LOADING, READY, COMPLETED, ERROR }
 
 private fun shareMedia(context: Context, uri: Uri) {
     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
@@ -521,7 +418,6 @@ private fun shareMedia(context: Context, uri: Uri) {
 
 private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? {
     ThumbnailMemoryCache.get(uri, isVideo)?.let { return it }
-
     val bitmap = runCatching {
         if (Build.VERSION.SDK_INT >= 29) {
             context.contentResolver.loadThumbnail(uri, Size(360, 360), null)
@@ -532,41 +428,32 @@ private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap?
         }
     }.getOrNull()
 
-    return bitmap?.let { ThumbnailMemoryCache.put(uri, isVideo, it) }
+    if (bitmap != null) return ThumbnailMemoryCache.put(uri, isVideo, bitmap)
+    if (!isVideo) return null
+
+    val fallback = runCatching {
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(context, uri)
+            retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+        }
+    }.getOrNull()
+    return fallback?.let { ThumbnailMemoryCache.put(uri, true, it) }
 }
 
 private fun loadFullImage(context: Context, uri: Uri): Bitmap? {
     val maxDimension = 2048
-
     return runCatching {
-        // First read only the image bounds. This avoids decoding the complete original
-        // image merely to find out how large it is.
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, bounds)
-        }
-
+        context.contentResolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
-
-        // Decode a display-sized copy rather than an arbitrarily large camera original.
-        // This keeps memory usage predictable while retaining plenty of detail for the
-        // phone-sized viewer and editor hand-off.
         val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
-        val options = BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
-
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            BitmapFactory.decodeStream(input, null, options)
-        }
+        val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+        context.contentResolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, options) }
     }.getOrNull()
 }
 
 private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
     var sample = 1
-    while (width / (sample * 2) >= maxDimension && height / (sample * 2) >= maxDimension) {
-        sample *= 2
-    }
+    while (width / (sample * 2) >= maxDimension && height / (sample * 2) >= maxDimension) sample *= 2
     return sample
 }
