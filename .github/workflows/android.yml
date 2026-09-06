@@ -30,11 +30,6 @@ jobs:
       - name: Install Android SDK platform
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
-
       - name: Validate and normalize scanner source
         shell: bash
         run: |
@@ -82,18 +77,17 @@ jobs:
           }
           '''
 
-          # decodePreview() is the final function in this source file. Replace only
-          # that function so the build cannot depend on a fragile regex or on a
-          # generated commit inside the workflow.
           normalized = text[:start] + replacement
           path.write_text(normalized, encoding="utf-8")
           PY
 
-          # Fail early if the source still contains the invalid expression-body form.
           if grep -q 'private fun decodePreview(path: String): Bitmap? = try' app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt; then
             echo "decodePreview() was not normalized"
             exit 1
           fi
+
+      - name: Apply camera feedback patch
+        run: python3 tools/patch_camera_feedback.py
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
