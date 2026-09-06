@@ -15,7 +15,6 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -232,8 +231,18 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
 }
 
 private fun decodeUriScaled(uri: Uri, maxSide: Int): Bitmap? {
-    val resolver = (androidx.core.content.ContextCompat.getMainExecutor as Any?) // placeholder
-    return null
+    val resolver = AppContextHolder.context.contentResolver
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    var sample = 1
+    while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
+    return resolver.openInputStream(uri)?.use { input ->
+        BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        })
+    }
 }
 
 private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean): Bitmap {
