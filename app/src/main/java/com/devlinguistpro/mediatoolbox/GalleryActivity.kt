@@ -535,6 +535,38 @@ private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap?
     return bitmap?.let { ThumbnailMemoryCache.put(uri, isVideo, it) }
 }
 
-private fun loadFullImage(context: Context, uri: Uri): Bitmap? = runCatching {
-    context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) }
-}.getOrNull()
+private fun loadFullImage(context: Context, uri: Uri): Bitmap? {
+    val maxDimension = 2048
+
+    return runCatching {
+        // First read only the image bounds. This avoids decoding the complete original
+        // image merely to find out how large it is.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, bounds)
+        }
+
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+
+        // Decode a display-sized copy rather than an arbitrarily large camera original.
+        // This keeps memory usage predictable while retaining plenty of detail for the
+        // phone-sized viewer and editor hand-off.
+        val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension)
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            BitmapFactory.decodeStream(input, null, options)
+        }
+    }.getOrNull()
+}
+
+private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int {
+    var sample = 1
+    while (width / (sample * 2) >= maxDimension && height / (sample * 2) >= maxDimension) {
+        sample *= 2
+    }
+    return sample
+}
