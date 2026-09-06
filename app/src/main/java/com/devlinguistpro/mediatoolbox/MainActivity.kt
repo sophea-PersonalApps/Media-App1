@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 MediaToolboxApp(
                     hasCameraPermission = cameraPermissionGranted,
+                    currentLens = currentLens,
                     flashSetting = flashSetting,
                     flashAvailable = flashAvailable,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
@@ -349,6 +350,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun MediaToolboxApp(
     hasCameraPermission: Boolean,
+    currentLens: Int,
     flashSetting: FlashSetting,
     flashAvailable: Boolean,
     onRequestPermission: () -> Unit,
@@ -372,6 +374,7 @@ private fun MediaToolboxApp(
                 if (selected == CameraMode.SCAN || selected == CameraMode.QR) onModeChanged(selected)
                 else { mode = selected; onModeChanged(selected) }
             },
+            currentLens,
             onPreviewReady,
             onCapture,
             onVideoToggle,
@@ -404,6 +407,7 @@ private fun PermissionScreen(onRequestPermission: () -> Unit) {
 private fun CameraScreen(
     mode: CameraMode,
     onModeChanged: (CameraMode) -> Unit,
+    currentLens: Int,
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
