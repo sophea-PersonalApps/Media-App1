@@ -72,7 +72,7 @@ class MainActivity : ComponentActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
-    private var activeRecording: Recording? = null
+    private var activeRecording by mutableStateOf<Recording?>(null)
     private var currentLens = CameraSelector.LENS_FACING_BACK
     private var currentMode = CameraMode.PHOTO
     private var previewView: PreviewView? = null
@@ -108,6 +108,7 @@ class MainActivity : ComponentActivity() {
                     onPreviewReady = { view -> previewView = view; if (cameraPermissionGranted) bindCamera() },
                     onCapture = ::capturePhoto,
                     onVideoToggle = ::toggleVideoRecording,
+                    isRecording = activeRecording != null,
                     onFlip = ::flipCamera,
                     onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
                     onOpenSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
@@ -354,6 +355,7 @@ private fun MediaToolboxApp(
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
+    isRecording: Boolean,
     onFlip: () -> Unit,
     onOpenGallery: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -373,6 +375,7 @@ private fun MediaToolboxApp(
             onPreviewReady,
             onCapture,
             onVideoToggle,
+            isRecording,
             onFlip,
             onOpenGallery,
             onOpenSettings,
@@ -404,6 +407,7 @@ private fun CameraScreen(
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
+    isRecording: Boolean,
     onFlip: () -> Unit,
     onOpenGallery: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -416,11 +420,22 @@ private fun CameraScreen(
     val context = LocalContext.current
     val modes = CameraMode.entries
     val selectedIndex = modes.indexOf(mode)
+    var showCaptureFlash by remember { mutableStateOf(false) }
+    LaunchedEffect(showCaptureFlash) {
+        if (showCaptureFlash) {
+            kotlinx.coroutines.delay(120)
+            showCaptureFlash = false
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
             modifier = Modifier.fillMaxSize()
         )
+        if (showCaptureFlash && mode == CameraMode.PHOTO) {
+            Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.88f)))
+        }
         Box(
             Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
                 var drag = 0f
@@ -435,7 +450,25 @@ private fun CameraScreen(
         )
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
-            CameraControls(mode, selectedIndex, modes, onModeChanged, onCapture, onVideoToggle, onFlip, onOpenSettings, flashSetting, flashAvailable, onCycleFlash, moreOpen, setMoreOpen)
+            CameraControls(
+                mode = mode,
+                selectedIndex = selectedIndex,
+                modes = modes,
+                onModeChanged = onModeChanged,
+                onCapture = {
+                    onCapture()
+                    if (mode == CameraMode.PHOTO) showCaptureFlash = true
+                },
+                onVideoToggle = onVideoToggle,
+                isRecording = isRecording,
+                onFlip = onFlip,
+                onOpenSettings = onOpenSettings,
+                flashSetting = flashSetting,
+                flashAvailable = flashAvailable,
+                onCycleFlash = onCycleFlash,
+                moreOpen = moreOpen,
+                setMoreOpen = setMoreOpen
+            )
             BottomNavigation(onCamera = { onModeChanged(CameraMode.PHOTO) }, onGallery = onOpenGallery, cameraSelected = mode == CameraMode.PHOTO)
         }
     }
@@ -449,6 +482,7 @@ private fun CameraControls(
     onModeChanged: (CameraMode) -> Unit,
     onCapture: () -> Unit,
     onVideoToggle: () -> Unit,
+    isRecording: Boolean,
     onFlip: () -> Unit,
     onOpenSettings: () -> Unit,
     flashSetting: FlashSetting,
@@ -466,8 +500,19 @@ private fun CameraControls(
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth().padding(horizontal = sidePadding), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 ControlButton({ Icon(Icons.Default.MoreVert, "More", tint = Color.White) }, "MORE") { setMoreOpen(true) }
-                ShutterButton(mode, onCapture, onVideoToggle)
+                ShutterButton(mode, isRecording, onCapture, onVideoToggle)
                 ControlButton({ Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }, "FLIP", onFlip)
+            }
+            if (mode == CameraMode.VIDEO && isRecording) {
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(Modifier.size(9.dp).background(Color.Red, CircleShape))
+                    Spacer(Modifier.width(7.dp))
+                    Text("RECORDING", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
             }
             Spacer(Modifier.height(8.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = sidePadding), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
@@ -522,7 +567,7 @@ private fun ControlButton(icon: @Composable () -> Unit, label: String, onClick: 
 }
 
 @Composable
-private fun ShutterButton(mode: CameraMode, onPhoto: () -> Unit, onVideoToggle: () -> Unit) {
+private fun ShutterButton(mode: CameraMode, isRecording: Boolean, onPhoto: () -> Unit, onVideoToggle: () -> Unit) {
     val context = LocalContext.current
     val enabled = mode == CameraMode.PHOTO || mode == CameraMode.VIDEO || mode == CameraMode.SCAN || mode == CameraMode.QR
     val action = when (mode) {
@@ -531,8 +576,18 @@ private fun ShutterButton(mode: CameraMode, onPhoto: () -> Unit, onVideoToggle: 
         CameraMode.SCAN -> ({ context.startActivity(Intent(context, ScannerActivity::class.java)) })
         CameraMode.QR -> ({ context.startActivity(Intent(context, QrScannerActivity::class.java)) })
     }
-    Box(Modifier.size(72.dp).background(Color.White.copy(alpha = if (enabled) 1f else 0.45f), CircleShape).clickable(enabled = enabled, onClick = action).padding(5.dp).background(Color.Black, CircleShape), contentAlignment = Alignment.Center) {
-        Box(Modifier.size(if (mode == CameraMode.VIDEO) 42.dp else 58.dp).background(Color.White, if (mode == CameraMode.VIDEO) RoundedCornerShape(10.dp) else CircleShape))
+    Box(
+        Modifier.size(72.dp)
+            .background(Color.White.copy(alpha = if (enabled) 1f else 0.45f), CircleShape)
+            .clickable(enabled = enabled, onClick = action)
+            .padding(5.dp)
+            .background(Color.Black, CircleShape),
+        contentAlignment = Alignment.Center
+    ) {
+        val innerShape = if (mode == CameraMode.VIDEO && isRecording) RoundedCornerShape(10.dp) else CircleShape
+        val innerSize = if (mode == CameraMode.VIDEO && isRecording) 36.dp else if (mode == CameraMode.VIDEO) 52.dp else 58.dp
+        val innerColor = if (mode == CameraMode.VIDEO) Color.Red else Color.White
+        Box(Modifier.size(innerSize).background(innerColor, innerShape))
     }
 }
 
