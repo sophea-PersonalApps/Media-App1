@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -34,6 +34,58 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
+
+      - name: Fix scanner Kotlin expression-body syntax
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
+          text = path.read_text(encoding="utf-8")
+
+          pattern = re.compile(
+              r'private fun decodePreview\(path: String\): Bitmap\? = try \{.*?\n\} catch \(_ : Exception\) \{ null \}',
+              re.DOTALL,
+          )
+          replacement = '''private fun decodePreview(path: String): Bitmap? {
+              return try {
+                  val file = File(path)
+                  val bitmap = BitmapFactory.decodeFile(path) ?: return null
+                  val orientation = ExifInterface(file.absolutePath).getAttributeInt(
+                      ExifInterface.TAG_ORIENTATION,
+                      ExifInterface.ORIENTATION_NORMAL
+                  )
+                  val matrix = Matrix()
+                  when (orientation) {
+                      ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                      ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                      ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+                      ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+                      else -> return bitmap
+                  }
+                  Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also {
+                      if (it !== bitmap) bitmap.recycle()
+                  }
+              } catch (_: Exception) {
+                  null
+              }
+          }'''
+
+          fixed, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit("Expected scanner decodePreview function was not found")
+          path.write_text(fixed, encoding="utf-8")
+          PY
+
+          if ! git diff --quiet -- app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt
+            git commit -m "Fix scanner Kotlin expression-body syntax [skip ci]"
+            git push
+          fi
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
