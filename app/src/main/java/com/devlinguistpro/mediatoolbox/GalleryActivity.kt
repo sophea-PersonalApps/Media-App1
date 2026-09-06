@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -362,6 +364,8 @@ private fun VideoPlayer(uri: Uri) {
     val context = LocalContext.current
     var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
     var retryKey by remember(uri) { mutableIntStateOf(0) }
+    var speed by remember(uri) { mutableFloatStateOf(1f) }
+    var speedMenuOpen by remember(uri) { mutableStateOf(false) }
     val videoView = remember(uri) {
         VideoView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -375,6 +379,7 @@ private fun VideoPlayer(uri: Uri) {
         state = VideoLoadState.LOADING
         videoView.setOnPreparedListener { player ->
             player.isLooping = false
+            player.playbackParams = player.playbackParams.apply { this.speed = speed }
             state = VideoLoadState.READY
             videoView.requestFocus()
             player.start()
@@ -402,6 +407,27 @@ private fun VideoPlayer(uri: Uri) {
                 Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") }
             }
             VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit
+        }
+        if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) {
+            Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }
+                DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                    listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed ->
+                        DropdownMenuItem(
+                            text = { Text("${selectedSpeed}x") },
+                            onClick = {
+                                speed = selectedSpeed
+                                runCatching {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                        videoView.playbackParams = videoView.playbackParams.apply { this.speed = selectedSpeed }
+                                    }
+                                }
+                                speedMenuOpen = false
+                            }
+                        )
+                    }
+                }
+            }
         }
     }
 }
