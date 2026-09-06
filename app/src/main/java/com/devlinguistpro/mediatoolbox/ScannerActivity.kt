@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
@@ -21,13 +22,16 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
+import androidx.camera.core.SurfaceRequest
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,11 +46,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -59,9 +65,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color as ComposeColor
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +78,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -81,6 +90,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class ScannerActivity : ComponentActivity() {
     private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private val processingExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
     private var previewView: PreviewView? = null
@@ -90,6 +100,7 @@ class ScannerActivity : ComponentActivity() {
     private var selectedFolderName by mutableStateOf(MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER)
     private var cameraPermissionGranted by mutableStateOf(false)
     private var cameraBindRequested = false
+    private var captureInProgress = AtomicBoolean(false)
     private val savingPdf = AtomicBoolean(false)
 
     companion object {
@@ -159,7 +170,10 @@ class ScannerActivity : ComponentActivity() {
                     },
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
-                    onSave = ::savePdf
+                    onSave = ::savePdf,
+                    onOpenCamera = ::openCamera,
+                    onOpenGallery = ::openGallery,
+                    onOpenQr = ::openQr
                 )
             }
         }
@@ -167,14 +181,11 @@ class ScannerActivity : ComponentActivity() {
 
     private fun restoreScannerState(savedInstanceState: Bundle?) {
         pages.clear()
-        val restoredPaths = savedInstanceState
-            ?.getStringArrayList(STATE_PAGE_PATHS)
-            .orEmpty()
-            .filter { path ->
-                val file = File(path)
-                file.isFile && file.length() > 0L
-            }
-        pages.addAll(restoredPaths)
+        val restored = savedInstanceState?.getStringArrayList(STATE_PAGE_PATHS).orEmpty().filter { path ->
+            val file = File(path)
+            file.isFile && file.length() > 0L
+        }
+        pages.addAll(restored)
         showingPreview = savedInstanceState?.getBoolean(STATE_SHOWING_PREVIEW, false) == true && pages.isNotEmpty()
         lensFacing = savedInstanceState?.getInt(STATE_LENS_FACING, CameraSelector.LENS_FACING_BACK)
             ?: CameraSelector.LENS_FACING_BACK
@@ -195,14 +206,17 @@ class ScannerActivity : ComponentActivity() {
         if (granted && cameraBindRequested && !showingPreview) bindCamera()
     }
 
+    override fun onPause() {
+        cameraProvider?.unbindAll()
+        imageCapture = null
+        super.onPause()
+    }
+
     private fun applyKeepScreenOnPreference() {
         val keepOn = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
             .getBoolean(MediaToolboxPrefs.KEY_KEEP_SCREEN_ON, true)
-        if (keepOn) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+        if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
     private fun hasCameraPermission(): Boolean =
@@ -218,25 +232,20 @@ class ScannerActivity : ComponentActivity() {
                 if (isFinishing || showingPreview) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
-
                 val preview = Preview.Builder()
                     .build()
                     .also { it.surfaceProvider = view.surfaceProvider }
                 val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setTargetRotation(view.display?.rotation ?: android.view.Surface.ROTATION_0)
                     .build()
-                val selector = CameraSelector.Builder()
-                    .requireLensFacing(lensFacing)
-                    .build()
-
+                val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
                 provider.unbindAll()
                 imageCapture = capture
                 provider.bindToLifecycle(this, selector, preview, capture)
             } catch (_: Exception) {
                 imageCapture = null
-                if (!isFinishing) {
-                    Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show()
-                }
+                if (!isFinishing) Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -247,50 +256,176 @@ class ScannerActivity : ComponentActivity() {
             bindCamera()
             return
         }
+        if (!captureInProgress.compareAndSet(false, true)) return
 
         val sessionDir = File(filesDir, SESSION_DIR).apply { mkdirs() }
-        val file = File(sessionDir, "scan_${System.currentTimeMillis()}.jpg")
+        val rawFile = File(sessionDir, "raw_${System.currentTimeMillis()}.jpg")
+        val output = ImageCapture.OutputFileOptions.Builder(rawFile).build()
 
-        capture.takePicture(
-            ImageCapture.OutputFileOptions.Builder(file).build(),
-            cameraExecutor,
-            object : ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                    runOnUiThread {
-                        if (file.isFile && file.length() > 0L) {
-                            pages.add(file.absolutePath)
-                        } else {
-                            file.delete()
-                            Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
+        capture.takePicture(output, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
+            override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                processingExecutor.execute {
+                    try {
+                        val processed = processDocument(rawFile)
+                        rawFile.delete()
+                        runOnUiThread {
+                            if (processed != null && processed.isFile && processed.length() > 0L) {
+                                pages.add(processed.absolutePath)
+                            } else {
+                                processed?.delete()
+                                Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
+                            }
+                            captureInProgress.set(false)
+                        }
+                    } catch (_: Exception) {
+                        rawFile.delete()
+                        runOnUiThread {
+                            Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
+                            captureInProgress.set(false)
                         }
                     }
                 }
+            }
 
-                override fun onError(exception: ImageCaptureException) {
-                    file.delete()
-                    runOnUiThread {
-                        Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
-                    }
+            override fun onError(exception: ImageCaptureException) {
+                rawFile.delete()
+                runOnUiThread {
+                    Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
+                    captureInProgress.set(false)
                 }
             }
-        )
+        })
+    }
+
+    private fun processDocument(rawFile: File): File? {
+        if (!rawFile.isFile || rawFile.length() == 0L) return null
+        val source = decodeBitmap(rawFile, 1800) ?: return null
+        val rotated = rotateFromExif(rawFile, source)
+        if (rotated !== source) source.recycle()
+
+        val bounds = detectPageBounds(rotated)
+        val cropped = try {
+            Bitmap.createBitmap(rotated, bounds.left, bounds.top, bounds.width(), bounds.height())
+        } catch (_: Exception) {
+            null
+        }
+        if (cropped == null) {
+            rotated.recycle()
+            return null
+        }
+        if (cropped !== rotated) rotated.recycle()
+
+        val sessionDir = File(filesDir, SESSION_DIR).apply { mkdirs() }
+        val output = File(sessionDir, "page_${System.currentTimeMillis()}.jpg")
+        return try {
+            output.outputStream().use { stream ->
+                if (!cropped.compress(Bitmap.CompressFormat.JPEG, 94, stream)) throw IOException("JPEG encode failed")
+            }
+            cropped.recycle()
+            output
+        } catch (_: Exception) {
+            cropped.recycle()
+            output.delete()
+            null
+        }
+    }
+
+    private fun decodeBitmap(file: File, maxSide: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
+        return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        })
+    }
+
+    private fun rotateFromExif(file: File, bitmap: Bitmap): Bitmap {
+        val orientation = runCatching { ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) }
+            .getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val matrix = Matrix()
+        when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+            ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+            ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+            ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+            ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.postRotate(90f); matrix.preScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.postRotate(270f); matrix.preScale(-1f, 1f) }
+            else -> return bitmap
+        }
+        return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    }
+
+    /**
+     * Finds the usable document rectangle without assuming a particular phone size.
+     * The detector looks for strong brightness transitions around the image edges.
+     * If no convincing page boundary exists, it deliberately falls back to the full
+     * corrected image instead of destroying document content with an aggressive crop.
+     */
+    private fun detectPageBounds(bitmap: Bitmap): android.graphics.Rect {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w < 100 || h < 100) return android.graphics.Rect(0, 0, w, h)
+
+        val sample = 4
+        val sw = w / sample
+        val sh = h / sample
+        val pixels = IntArray(sw * sh)
+        bitmap.getPixels(pixels, 0, sw, 0, 0, sw, sh)
+
+        fun lum(c: Int): Int = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
+        val rows = DoubleArray(sh - 1)
+        val cols = DoubleArray(sw - 1)
+        for (y in 0 until sh - 1) {
+            var total = 0L
+            for (x in 0 until sw) total += kotlin.math.abs(lum(pixels[y * sw + x]) - lum(pixels[(y + 1) * sw + x]))
+            rows[y] = total.toDouble() / sw
+        }
+        for (x in 0 until sw - 1) {
+            var total = 0L
+            for (y in 0 until sh) total += kotlin.math.abs(lum(pixels[y * sw + x]) - lum(pixels[y * sw + x + 1]))
+            cols[x] = total.toDouble() / sh
+        }
+
+        val top = strongestEdge(rows, 0, (sh * 0.45).toInt())
+        val bottom = strongestEdge(rows, (sh * 0.55).toInt(), sh - 1)
+        val left = strongestEdge(cols, 0, (sw * 0.45).toInt())
+        val right = strongestEdge(cols, (sw * 0.55).toInt(), sw - 1)
+
+        val minW = w * 0.45f
+        val minH = h * 0.45f
+        val rect = android.graphics.Rect(left * sample, top * sample, (right + 1) * sample, (bottom + 1) * sample)
+        val valid = rect.width() >= minW && rect.height() >= minH &&
+            rect.left > w * 0.015f && rect.top > h * 0.015f &&
+            rect.right < w * 0.985f && rect.bottom < h * 0.985f
+        return if (valid) rect else android.graphics.Rect(0, 0, w, h)
+    }
+
+    private fun strongestEdge(values: DoubleArray, start: Int, endExclusive: Int): Int {
+        if (values.isEmpty()) return 0
+        var best = start.coerceIn(0, values.lastIndex)
+        var bestValue = 0.0
+        for (i in start.coerceIn(0, values.lastIndex) until endExclusive.coerceAtMost(values.size)) {
+            if (values[i] > bestValue) {
+                bestValue = values[i]
+                best = i
+            }
+        }
+        return best
     }
 
     private fun deletePage(index: Int) {
-        if (savingPdf.get()) return
-        if (index in pages.indices) {
-            File(pages.removeAt(index)).delete()
-        }
+        if (savingPdf.get() || index !in pages.indices) return
+        File(pages.removeAt(index)).delete()
         if (pages.isEmpty()) showingPreview = false
     }
 
     private fun flipCamera() {
-        if (savingPdf.get()) return
-        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
-            CameraSelector.LENS_FACING_FRONT
-        } else {
-            CameraSelector.LENS_FACING_BACK
-        }
+        if (savingPdf.get() || captureInProgress.get()) return
+        lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         cameraProvider?.unbindAll()
         imageCapture = null
         bindCamera()
@@ -304,13 +439,14 @@ class ScannerActivity : ComponentActivity() {
             ?: MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER
 
     private fun folderName(uri: Uri): String = try {
-        DocumentsContract.getTreeDocumentId(uri)
-            ?.substringAfterLast(':')
-            ?.let(Uri::decode)
-            ?.takeIf { it.isNotBlank() }
-            ?: "Chosen folder"
-    } catch (_: Exception) {
-        "Chosen folder"
+        DocumentsContract.getTreeDocumentId(uri)?.substringAfterLast(':')?.let(Uri::decode)?.takeIf { it.isNotBlank() } ?: "Chosen folder"
+    } catch (_: Exception) { "Chosen folder" }
+
+    /** Converts a persisted tree URI into the document URI expected by createDocument(). */
+    private fun writableParentUri(treeUri: Uri): Uri? {
+        if (treeUri.scheme != "content") return null
+        val treeId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        return runCatching { DocumentsContract.buildDocumentUriUsingTree(treeUri, treeId) }.getOrNull()
     }
 
     private fun hasPersistedWriteAccess(uri: Uri): Boolean =
@@ -318,53 +454,35 @@ class ScannerActivity : ComponentActivity() {
 
     private fun savePdf() {
         if (!savingPdf.compareAndSet(false, true)) return
-
-        val folder = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
-            .getString(MediaToolboxPrefs.KEY_SCANNER_FOLDER, null)
-            ?.let(Uri::parse)
-
-        if (folder == null) {
+        val treeUri = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
+            .getString(MediaToolboxPrefs.KEY_SCANNER_FOLDER, null)?.let(Uri::parse)
+        val parentUri = treeUri?.let(::writableParentUri)
+        if (treeUri == null || parentUri == null) {
             savingPdf.set(false)
             Toast.makeText(this, "Choose a folder first", Toast.LENGTH_SHORT).show()
             folderPicker.launch(null)
             return
         }
-
         val pagePaths = pages.toList()
-        if (pagePaths.isEmpty()) {
-            savingPdf.set(false)
-            return
-        }
+        if (pagePaths.isEmpty()) { savingPdf.set(false); return }
 
-        Thread {
+        processingExecutor.execute {
             var outputUri: Uri? = null
             var document: PdfDocument? = null
             try {
-                if (!hasPersistedWriteAccess(folder)) {
-                    throw IOException("Folder access is no longer available")
-                }
-
+                if (!hasPersistedWriteAccess(treeUri)) throw IOException("Folder access is no longer available")
                 pagePaths.forEachIndexed { index, path ->
                     val file = File(path)
-                    if (!file.isFile || file.length() == 0L) {
-                        throw IOException("Scan page ${index + 1} is unavailable")
-                    }
+                    if (!file.isFile || file.length() == 0L) throw IOException("Scan page ${index + 1} is unavailable")
                 }
-
                 document = createPdf(pagePaths)
                 val name = "Scan_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())}.pdf"
-                outputUri = DocumentsContract.createDocument(
-                    contentResolver,
-                    folder,
-                    "application/pdf",
-                    name
-                ) ?: throw IOException("Could not create PDF in selected folder")
-
+                outputUri = DocumentsContract.createDocument(contentResolver, parentUri, "application/pdf", name)
+                    ?: throw IOException("Could not create PDF in selected folder")
                 contentResolver.openOutputStream(outputUri, "w")?.use { output ->
                     document!!.writeTo(output)
                     output.flush()
                 } ?: throw IOException("Could not open PDF for writing")
-
                 runOnUiThread {
                     Toast.makeText(this, "PDF saved", Toast.LENGTH_SHORT).show()
                     clearPages()
@@ -373,51 +491,32 @@ class ScannerActivity : ComponentActivity() {
             } catch (e: Exception) {
                 outputUri?.let { runCatching { contentResolver.delete(it, null, null) } }
                 runOnUiThread {
-                    Toast.makeText(
-                        this,
-                        "Could not save PDF: ${e.message ?: "unknown error"}",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    Toast.makeText(this, "Could not save PDF: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 document?.close()
                 savingPdf.set(false)
             }
-        }.start()
+        }
     }
 
     private fun createPdf(paths: List<String>): PdfDocument {
+        if (paths.isEmpty()) throw IOException("No scan pages")
         val document = PdfDocument()
         try {
             paths.forEachIndexed { index, path ->
-                val bitmap = decodePdfBitmap(File(path), 2200)
-                    ?: throw IOException("Unable to read scan page ${index + 1}")
+                val bitmap = decodePdfBitmap(File(path), 2200) ?: throw IOException("Unable to read scan page ${index + 1}")
                 try {
-                    val scale = minOf(
-                        1f,
-                        2200f / maxOf(bitmap.width, bitmap.height).toFloat()
-                    )
+                    val scale = minOf(1f, 2200f / maxOf(bitmap.width, bitmap.height).toFloat())
                     val width = (bitmap.width * scale).toInt().coerceIn(1, 2200)
                     val height = (bitmap.height * scale).toInt().coerceIn(1, 2200)
-                    val page = document.startPage(
-                        PdfDocument.PageInfo.Builder(width, height, index + 1).create()
-                    )
+                    val page = document.startPage(PdfDocument.PageInfo.Builder(width, height, index + 1).create())
                     try {
                         page.canvas.drawColor(Color.WHITE)
-                        page.canvas.drawBitmap(
-                            bitmap,
-                            null,
-                            RectF(0f, 0f, width.toFloat(), height.toFloat()),
-                            Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-                        )
-                    } finally {
-                        document.finishPage(page)
-                    }
-                } finally {
-                    bitmap.recycle()
-                }
+                        page.canvas.drawBitmap(bitmap, null, RectF(0f, 0f, width.toFloat(), height.toFloat()), Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG))
+                    } finally { document.finishPage(page) }
+                } finally { bitmap.recycle() }
             }
-            if (paths.isEmpty()) throw IOException("No scan pages")
             return document
         } catch (e: Exception) {
             document.close()
@@ -426,22 +525,14 @@ class ScannerActivity : ComponentActivity() {
     }
 
     private fun decodePdfBitmap(file: File, maxSide: Int): Bitmap? {
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.absolutePath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-        var sample = 1
-        while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) {
-            sample *= 2
+        val bitmap = decodeBitmap(file, maxSide) ?: return null
+        return try {
+            val rotated = rotateFromExif(file, bitmap)
+            if (rotated !== bitmap) bitmap.recycle()
+            rotated
+        } catch (_: Exception) {
+            bitmap
         }
-
-        return BitmapFactory.decodeFile(
-            file.absolutePath,
-            BitmapFactory.Options().apply {
-                inSampleSize = sample
-                inPreferredConfig = Bitmap.Config.ARGB_8888
-            }
-        )
     }
 
     private fun clearPages() {
@@ -449,9 +540,14 @@ class ScannerActivity : ComponentActivity() {
         pages.clear()
     }
 
+    private fun openCamera() { finish() }
+    private fun openGallery() { startActivity(Intent(this, GalleryActivity::class.java)) }
+    private fun openQr() { startActivity(Intent(this, QrScannerActivity::class.java)) }
+
     override fun onDestroy() {
         cameraProvider?.unbindAll()
         cameraExecutor.shutdown()
+        processingExecutor.shutdown()
         if (isFinishing) clearPages()
         super.onDestroy()
     }
@@ -472,28 +568,16 @@ private fun ScannerApp(
     onBackToScanner: () -> Unit,
     onFlip: () -> Unit,
     onChooseFolder: () -> Unit,
-    onSave: () -> Unit
+    onSave: () -> Unit,
+    onOpenCamera: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenQr: () -> Unit
 ) {
-    Surface(Modifier.fillMaxSize(), color = androidx.compose.ui.graphics.Color.Black) {
+    Surface(Modifier.fillMaxSize(), color = ComposeColor.Black) {
         when {
             !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack)
-            showingPreview -> ScannerPreview(
-                pages,
-                onBackToScanner,
-                onDeletePage,
-                folderName,
-                onChooseFolder,
-                onSave
-            )
-            else -> ScannerCapture(
-                pages,
-                onPreviewReady,
-                onCapture,
-                onDeletePage,
-                onFinish,
-                onBack,
-                onFlip
-            )
+            showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave, onOpenCamera, onOpenGallery, onOpenQr)
+            else -> ScannerCapture(pages, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip, onOpenCamera, onOpenGallery, onOpenQr)
         }
     }
 }
@@ -501,26 +585,13 @@ private fun ScannerApp(
 @Composable
 private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
     Column(
-        Modifier
-            .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .padding(28.dp),
+        Modifier.fillMaxSize().background(ComposeColor.Black).statusBarsPadding().navigationBarsPadding().padding(28.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            "Camera access is needed",
-            color = androidx.compose.ui.graphics.Color.White,
-            fontSize = 22.sp,
-            fontWeight = FontWeight.SemiBold
-        )
+        Text("Camera access is needed", color = ComposeColor.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(12.dp))
-        Text(
-            "The scanner uses the camera to capture pages. No camera image is uploaded.",
-            color = androidx.compose.ui.graphics.Color.LightGray
-        )
+        Text("The scanner uses the camera to capture pages. No camera image is uploaded.", color = ComposeColor.LightGray)
         Spacer(Modifier.height(20.dp))
         Button(onClick = onRequest) { Text("Allow camera") }
         Spacer(Modifier.height(8.dp))
@@ -536,110 +607,72 @@ private fun ScannerCapture(
     onDelete: (Int) -> Unit,
     onFinish: () -> Unit,
     onBack: () -> Unit,
-    onFlip: () -> Unit
+    onFlip: () -> Unit,
+    onOpenCamera: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenQr: () -> Unit
 ) {
     val context = LocalContext.current
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black)
-    ) {
+    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {
         AndroidView(
-            factory = {
-                PreviewView(context).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
-                    implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-                    onPreviewReady(this)
-                }
-            },
+            factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } },
             modifier = Modifier.fillMaxSize()
         )
-
+        ScannerPageGuide()
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.Default.ArrowBack, "Back", tint = androidx.compose.ui.graphics.Color.White)
-                }
-                Text(
-                    "Scanner",
-                    color = androidx.compose.ui.graphics.Color.White,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(top = 12.dp)
-                )
-                IconButton(onClick = onFlip) {
-                    Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = androidx.compose.ui.graphics.Color.White)
-                }
+            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }
+                Text("Scanner", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }
             }
-
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(androidx.compose.ui.graphics.Color.Black.copy(alpha = 0.82f))
-                    .navigationBarsPadding()
-                    .padding(10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.86f))) {
                 if (pages.isNotEmpty()) {
-                    LazyRow(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(72.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
+                    LazyRow(Modifier.fillMaxWidth().height(72.dp).padding(horizontal = 10.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         itemsIndexed(pages) { index, path ->
                             Box(Modifier.size(68.dp)) {
                                 LocalImage(path, Modifier.fillMaxSize())
-                                IconButton(
-                                    onClick = { onDelete(index) },
-                                    modifier = Modifier.align(Alignment.TopEnd).size(25.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        "Remove page",
-                                        tint = androidx.compose.ui.graphics.Color.White
-                                    )
+                                IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) {
+                                    Icon(Icons.Default.Delete, "Remove page", tint = ComposeColor.White)
                                 }
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                 }
-
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        "${pages.size} page${if (pages.size == 1) "" else "s"}",
-                        color = androidx.compose.ui.graphics.Color.White,
-                        modifier = Modifier.padding(end = 18.dp)
-                    )
-                    Box(
-                        Modifier
-                            .size(72.dp)
-                            .background(androidx.compose.ui.graphics.Color.White, CircleShape)
-                            .padding(5.dp)
-                            .clickable(onClick = onCapture),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            Modifier
-                                .size(58.dp)
-                                .background(androidx.compose.ui.graphics.Color.Black, CircleShape)
-                        )
+                Row(Modifier.fillMaxWidth().navigationBarsPadding().padding(10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.White, modifier = Modifier.padding(end = 18.dp))
+                    Box(Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(58.dp).background(ComposeColor.Black, CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.PhotoCamera, "Capture page", tint = ComposeColor.White, modifier = Modifier.size(28.dp))
+                        }
                     }
                     Spacer(Modifier.size(18.dp))
-                    Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
+                    Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Preview") }
                 }
+                ScannerBottomNavigation(onOpenCamera, onOpenGallery, onOpenQr)
             }
         }
+    }
+}
+
+@Composable
+private fun ScannerPageGuide() {
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val width = when { maxWidth < 360.dp -> 0.82f; maxWidth < 500.dp -> 0.86f; else -> 0.72f }
+        val height = when { maxHeight < 600.dp -> 0.58f; else -> 0.68f }
+        Canvas(Modifier.fillMaxSize()) {
+            val guideWidth = size.width * width
+            val guideHeight = size.height * height
+            val left = (size.width - guideWidth) / 2f
+            val top = (size.height - guideHeight) / 2f
+            drawRect(
+                color = ComposeColor.White.copy(alpha = 0.9f),
+                topLeft = Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(guideWidth, guideHeight),
+                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f, pathEffect = PathEffect.cornerPathEffect(18f))
+            )
+        }
+        Text("Fit the whole page inside the frame", color = ComposeColor.White.copy(alpha = 0.9f), fontSize = 14.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 205.dp))
     }
 }
 
@@ -650,120 +683,80 @@ private fun ScannerPreview(
     onDelete: (Int) -> Unit,
     folderName: String,
     onChooseFolder: () -> Unit,
-    onSave: () -> Unit
+    onSave: () -> Unit,
+    onOpenCamera: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenQr: () -> Unit
 ) {
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(androidx.compose.ui.graphics.Color.Black)
-            .statusBarsPadding()
-            .navigationBarsPadding()
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, "Back to scanner", tint = androidx.compose.ui.graphics.Color.White)
-            }
-            Text(
-                "Preview",
-                color = androidx.compose.ui.graphics.Color.White,
-                fontSize = 21.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                "${pages.size} page${if (pages.size == 1) "" else "s"}",
-                color = androidx.compose.ui.graphics.Color.LightGray
-            )
+    Column(Modifier.fillMaxSize().background(ComposeColor.Black).statusBarsPadding()) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }
+            Text("Preview", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.LightGray)
         }
-
-        LazyRow(
-            Modifier
-                .fillMaxWidth()
-                .height(94.dp)
-                .padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
+        LazyRow(Modifier.fillMaxWidth().height(94.dp).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             itemsIndexed(pages) { index, path ->
                 Box(Modifier.size(86.dp)) {
                     LocalImage(path, Modifier.fillMaxSize())
-                    IconButton(
-                        onClick = { onDelete(index) },
-                        modifier = Modifier.align(Alignment.TopEnd).size(27.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Delete,
-                            "Delete page",
-                            tint = androidx.compose.ui.graphics.Color.White
-                        )
+                    IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(27.dp)) {
+                        Icon(Icons.Default.Delete, "Delete page", tint = ComposeColor.White)
                     }
                 }
             }
         }
-
         Spacer(Modifier.height(10.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            if (pages.isNotEmpty()) {
-                LocalImage(pages[0], Modifier.fillMaxWidth().aspectRatio(0.72f))
-            }
+        Box(Modifier.fillMaxWidth().weight(1f).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+            if (pages.isNotEmpty()) LocalImage(pages[0], Modifier.fillMaxWidth().aspectRatio(0.72f))
         }
-
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Folder, "PDF folder", tint = androidx.compose.ui.graphics.Color.White)
+        Column(Modifier.fillMaxWidth().padding(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                Icon(Icons.Default.Folder, "PDF folder", tint = ComposeColor.White)
                 Spacer(Modifier.size(8.dp))
-                Text(
-                    folderName,
-                    color = androidx.compose.ui.graphics.Color.White,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
+                Text(folderName, color = ComposeColor.White, maxLines = 1, modifier = Modifier.weight(1f))
                 Button(onClick = onChooseFolder) { Text("Choose") }
             }
             Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = onSave,
-                modifier = Modifier.fillMaxWidth(),
-                enabled = pages.isNotEmpty()
-            ) {
+            Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) {
                 Icon(Icons.Default.PictureAsPdf, "Save PDF")
                 Spacer(Modifier.size(8.dp))
                 Text("Save PDF")
             }
         }
+        ScannerBottomNavigation(onOpenCamera, onOpenGallery, onOpenQr)
+    }
+}
+
+@Composable
+private fun ScannerBottomNavigation(onCamera: () -> Unit, onGallery: () -> Unit, onQr: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(ComposeColor.Black).navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
+        horizontalArrangement = Arrangement.SpaceEvenly,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Button(onClick = onCamera, modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) { Text("CAMERA") }
+        Button(onClick = onGallery, modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) { Text("GALLERY") }
+        Button(onClick = onQr, modifier = Modifier.weight(1f).padding(horizontal = 4.dp)) { Text("QR") }
     }
 }
 
 @Composable
 private fun LocalImage(path: String, modifier: Modifier) {
-    val bitmap = remember(path) { decodePreview(path) }
-    bitmap?.let {
-        Image(
-            it.asImageBitmap(),
-            "Scanned page",
-            modifier,
-            contentScale = ContentScale.Fit
-        )
-    }
+    val bitmap = androidx.compose.runtime.remember(path) { decodePreview(path) }
+    bitmap?.let { Image(it.asImageBitmap(), "Scanned page", modifier, contentScale = ContentScale.Fit) }
 }
 
 private fun decodePreview(path: String): Bitmap? = try {
-    BitmapFactory.decodeFile(path)
-} catch (_: Exception) {
-    null
-}
+    val file = File(path)
+    val bitmap = BitmapFactory.decodeFile(path) ?: return null
+    val orientation = ExifInterface(file.absolutePath).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    val matrix = Matrix()
+    when (orientation) {
+        ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+        ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+        ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        else -> return bitmap
+    }
+    Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also { if (it !== bitmap) bitmap.recycle() }
+} catch (_: Exception) { null }
