@@ -91,9 +91,6 @@ jobs:
             exit 1
           fi
 
-      - name: Apply camera feedback patch
-        run: python3 tools/patch_camera_feedback.py
-
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
