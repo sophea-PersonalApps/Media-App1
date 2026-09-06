@@ -60,10 +60,10 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.AtomicBoolean
 
 class GalleryEditorActivity : ComponentActivity() {
-    private val saving = AtomicBoolean(false)
+    private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,25 +76,15 @@ class GalleryEditorActivity : ComponentActivity() {
         setContent { MaterialTheme { GalleryEditor(uri, ::saveEdited, ::finish) } }
     }
 
-    private fun saveEdited(
-        sourceUri: Uri,
-        brightness: Float,
-        contrast: Float,
-        saturation: Float,
-        rotation: Float,
-        flipHorizontal: Boolean,
-        flipVertical: Boolean
-    ) {
+    private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean) {
         if (!saving.compareAndSet(false, true)) return
         Thread {
             var outputUri: Uri? = null
             var source: Bitmap? = null
             var edited: Bitmap? = null
             try {
-                source = decodeUriScaled(sourceUri, 4096)
-                    ?: throw IOException("Could not read source photo")
+                source = decodeUriScaled(contentResolver, sourceUri, 4096) ?: throw IOException("Could not read source photo")
                 edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
-
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${System.currentTimeMillis()}.jpg")
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -103,34 +93,18 @@ class GalleryEditorActivity : ComponentActivity() {
                         put(MediaStore.Images.Media.IS_PENDING, 1)
                     }
                 }
-                outputUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-                    ?: throw IOException("Could not create image")
-
+                outputUri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: throw IOException("Could not create image")
                 contentResolver.openOutputStream(outputUri)?.use { output ->
-                    if (!edited.compress(Bitmap.CompressFormat.JPEG, 95, output)) {
-                        throw IOException("Could not encode image")
-                    }
+                    if (!edited.compress(Bitmap.CompressFormat.JPEG, 95, output)) throw IOException("Could not encode image")
                     output.flush()
                 } ?: throw IOException("Could not open image")
-
                 if (Build.VERSION.SDK_INT >= 29) {
-                    val completed = ContentValues().apply {
-                        put(MediaStore.Images.Media.IS_PENDING, 0)
-                    }
-                    if (contentResolver.update(outputUri, completed, null, null) != 1) {
-                        throw IOException("Could not finish saving image")
-                    }
+                    if (contentResolver.update(outputUri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null) != 1) throw IOException("Could not finish saving image")
                 }
-
-                runOnUiThread {
-                    Toast.makeText(this, "Edited photo saved", Toast.LENGTH_SHORT).show()
-                    finish()
-                }
+                runOnUiThread { Toast.makeText(this, "Edited photo saved", Toast.LENGTH_SHORT).show(); finish() }
             } catch (e: Exception) {
                 outputUri?.let { runCatching { contentResolver.delete(it, null, null) } }
-                runOnUiThread {
-                    Toast.makeText(this, "Could not save edited photo: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
-                }
+                runOnUiThread { Toast.makeText(this, "Could not save edited photo: ${e.message ?: "unknown error"}", Toast.LENGTH_LONG).show() }
             } finally {
                 edited?.let { if (!it.isRecycled) it.recycle() }
                 source?.let { if (!it.isRecycled) it.recycle() }
@@ -161,17 +135,13 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
         preview?.let { if (!it.isRecycled) it.recycle() }
         originalPreview = null
         preview = null
-        originalPreview = withContext(Dispatchers.IO) {
-            runCatching { decodeUriScaled(uri, 1600) }.getOrNull()
-        }
+        originalPreview = withContext(Dispatchers.IO) { runCatching { decodeUriScaled(context.contentResolver, uri, 1600) }.getOrNull() }
         loading = false
     }
 
     LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) {
         val source = originalPreview ?: return@LaunchedEffect
-        val generated = withContext(Dispatchers.Default) {
-            runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }.getOrNull()
-        }
+        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }.getOrNull() }
         preview?.let { old -> if (!old.isRecycled && old !== generated) old.recycle() }
         preview = generated
     }
@@ -189,12 +159,9 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
                 Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
                 Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }, enabled = !loading && preview != null) {
-                    Icon(Icons.Default.Check, "Save")
-                    Spacer(Modifier.size(5.dp))
-                    Text("Save")
+                    Icon(Icons.Default.Check, "Save"); Spacer(Modifier.size(5.dp)); Text("Save")
                 }
             }
-
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 when {
                     preview != null -> Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
@@ -202,7 +169,6 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                     else -> Text("Photo could not be loaded", color = Color.LightGray)
                 }
             }
-
             Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                 Text("Brightness", color = Color.White)
                 Slider(value = brightness, onValueChange = { brightness = it }, valueRange = -1f..1f)
@@ -217,51 +183,31 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                     Button(onClick = { flipVertical = !flipVertical }) { Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V") }
                 }
                 Spacer(Modifier.height(6.dp))
-                Button(onClick = {
-                    brightness = 0f
-                    contrast = 1f
-                    saturation = 1f
-                    rotation = 0f
-                    flipHorizontal = false
-                    flipVertical = false
-                }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
+                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
             }
         }
     }
 }
 
-private fun decodeUriScaled(uri: Uri, maxSide: Int): Bitmap? {
-    val resolver = AppContextHolder.context.contentResolver
+private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri, maxSide: Int): Bitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     resolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, bounds) }
     if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
     var sample = 1
     while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) sample *= 2
-    return resolver.openInputStream(uri)?.use { input ->
-        BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        })
-    }
+    val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }
+    return resolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, options) }
 }
 
 private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean): Bitmap {
-    val matrix = Matrix().apply {
-        postRotate(rotation)
-        postScale(if (flipHorizontal) -1f else 1f, if (flipVertical) -1f else 1f)
-    }
+    val matrix = Matrix().apply { postRotate(rotation); postScale(if (flipHorizontal) -1f else 1f, if (flipVertical) -1f else 1f) }
     val transformed = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     val output = Bitmap.createBitmap(transformed.width, transformed.height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val cm = ColorMatrix().apply {
         setSaturation(saturation)
         val scale = contrast
-        postConcat(ColorMatrix(floatArrayOf(
-            scale, 0f, 0f, 0f, brightness * 255f,
-            0f, scale, 0f, 0f, brightness * 255f,
-            0f, 0f, scale, 0f, brightness * 255f,
-            0f, 0f, 0f, 1f, 0f
-        )))
+        postConcat(ColorMatrix(floatArrayOf(scale, 0f, 0f, 0f, brightness * 255f, 0f, scale, 0f, 0f, brightness * 255f, 0f, 0f, scale, 0f, brightness * 255f, 0f, 0f, 0f, 1f, 0f)))
     }
     val paint = android.graphics.Paint().apply { colorFilter = ColorMatrixColorFilter(cm) }
     canvas.drawBitmap(transformed, 0f, 0f, paint)
