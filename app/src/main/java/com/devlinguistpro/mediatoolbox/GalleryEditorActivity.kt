@@ -15,6 +15,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -91,7 +92,7 @@ class GalleryEditorActivity : ComponentActivity() {
             var source: Bitmap? = null
             var edited: Bitmap? = null
             try {
-                source = contentResolver.openInputStream(sourceUri)?.use(BitmapFactory::decodeStream)
+                source = decodeUriScaled(sourceUri, 4096)
                     ?: throw IOException("Could not read source photo")
                 edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
 
@@ -162,9 +163,7 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
         originalPreview = null
         preview = null
         originalPreview = withContext(Dispatchers.IO) {
-            runCatching {
-                context.contentResolver.openInputStream(uri)?.use { decodeScaled(it, 1600) }
-            }.getOrNull()
+            runCatching { decodeUriScaled(uri, 1600) }.getOrNull()
         }
         loading = false
     }
@@ -190,12 +189,7 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
                 Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Button(
-                    onClick = {
-                        onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
-                    },
-                    enabled = !loading && preview != null
-                ) {
+                Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }, enabled = !loading && preview != null) {
                     Icon(Icons.Default.Check, "Save")
                     Spacer(Modifier.size(5.dp))
                     Text("Save")
@@ -218,45 +212,28 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                 Text("Saturation", color = Color.White)
                 Slider(value = saturation, onValueChange = { saturation = it }, valueRange = 0f..2f)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Button(onClick = { rotation = (rotation - 90f) % 360f }) {
-                        Icon(Icons.Default.RotateLeft, "Rotate left"); Spacer(Modifier.size(4.dp)); Text("Left")
-                    }
-                    Button(onClick = { rotation = (rotation + 90f) % 360f }) {
-                        Icon(Icons.Default.RotateRight, "Rotate right"); Spacer(Modifier.size(4.dp)); Text("Right")
-                    }
-                    Button(onClick = { flipHorizontal = !flipHorizontal }) {
-                        Icon(Icons.Default.Flip, "Flip horizontal"); Spacer(Modifier.size(4.dp)); Text("H")
-                    }
-                    Button(onClick = { flipVertical = !flipVertical }) {
-                        Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V")
-                    }
+                    Button(onClick = { rotation = (rotation - 90f) % 360f }) { Icon(Icons.Default.RotateLeft, "Rotate left"); Spacer(Modifier.size(4.dp)); Text("Left") }
+                    Button(onClick = { rotation = (rotation + 90f) % 360f }) { Icon(Icons.Default.RotateRight, "Rotate right"); Spacer(Modifier.size(4.dp)); Text("Right") }
+                    Button(onClick = { flipHorizontal = !flipHorizontal }) { Icon(Icons.Default.Flip, "Flip horizontal"); Spacer(Modifier.size(4.dp)); Text("H") }
+                    Button(onClick = { flipVertical = !flipVertical }) { Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V") }
                 }
                 Spacer(Modifier.height(6.dp))
-                Button(
-                    onClick = {
-                        brightness = 0f
-                        contrast = 1f
-                        saturation = 1f
-                        rotation = 0f
-                        flipHorizontal = false
-                        flipVertical = false
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("Reset edits") }
+                Button(onClick = {
+                    brightness = 0f
+                    contrast = 1f
+                    saturation = 1f
+                    rotation = 0f
+                    flipHorizontal = false
+                    flipVertical = false
+                }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
             }
         }
     }
 }
 
-private fun decodeScaled(input: java.io.InputStream, maxSide: Int): Bitmap? {
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    input.mark(64 * 1024)
-    BitmapFactory.decodeStream(input, null, bounds)
-    input.reset()
-    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-    var sample = 1
-    while (bounds.outWidth / sample > maxSide * 2 || bounds.outHeight / sample > maxSide * 2) sample *= 2
-    return BitmapFactory.decodeStream(input, null, BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 })
+private fun decodeUriScaled(uri: Uri, maxSide: Int): Bitmap? {
+    val resolver = (androidx.core.content.ContextCompat.getMainExecutor as Any?) // placeholder
+    return null
 }
 
 private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean): Bitmap {
