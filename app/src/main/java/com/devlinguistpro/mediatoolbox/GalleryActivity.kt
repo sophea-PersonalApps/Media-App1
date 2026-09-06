@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -366,6 +367,7 @@ private fun VideoPlayer(uri: Uri) {
     var retryKey by remember(uri) { mutableIntStateOf(0) }
     var speed by remember(uri) { mutableFloatStateOf(1f) }
     var speedMenuOpen by remember(uri) { mutableStateOf(false) }
+    var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
     val videoView = remember(uri) {
         VideoView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -377,15 +379,20 @@ private fun VideoPlayer(uri: Uri) {
 
     LaunchedEffect(uri, retryKey) {
         state = VideoLoadState.LOADING
+        activePlayer = null
         videoView.setOnPreparedListener { player ->
+            activePlayer = player
             player.isLooping = false
-            player.playbackParams = player.playbackParams.apply { this.speed = speed }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                player.playbackParams = player.playbackParams.apply { this.speed = speed }
+            }
             state = VideoLoadState.READY
             videoView.requestFocus()
             player.start()
         }
         videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }
         videoView.setOnErrorListener { _, _, _ ->
+            activePlayer = null
             state = VideoLoadState.ERROR
             true
         }
@@ -394,7 +401,10 @@ private fun VideoPlayer(uri: Uri) {
     }
 
     DisposableEffect(videoView) {
-        onDispose { runCatching { videoView.stopPlayback() } }
+        onDispose {
+            activePlayer = null
+            runCatching { videoView.stopPlayback() }
+        }
     }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -417,9 +427,11 @@ private fun VideoPlayer(uri: Uri) {
                             text = { Text("${selectedSpeed}x") },
                             onClick = {
                                 speed = selectedSpeed
-                                runCatching {
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                        videoView.playbackParams = videoView.playbackParams.apply { this.speed = selectedSpeed }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                    activePlayer?.let { player ->
+                                        runCatching {
+                                            player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed }
+                                        }
                                     }
                                 }
                                 speedMenuOpen = false
