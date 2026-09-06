@@ -35,61 +35,33 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Validate and normalize scanner source
+      - name: Validate scanner source
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
           text = path.read_text(encoding="utf-8")
-          marker = "private fun decodePreview(path: String): Bitmap?"
-          start = text.find(marker)
-          if start < 0:
+          if "private fun decodePreview(path: String): Bitmap?" not in text:
               raise SystemExit("ScannerActivity.kt is missing decodePreview()")
-
-          replacement = '''private fun decodePreview(path: String): Bitmap? {
-              return try {
-                  val file = File(path)
-                  val bitmap = BitmapFactory.decodeFile(path) ?: return null
-                  val orientation = ExifInterface(file.absolutePath).getAttributeInt(
-                      ExifInterface.TAG_ORIENTATION,
-                      ExifInterface.ORIENTATION_NORMAL
-                  )
-                  val matrix = Matrix()
-                  when (orientation) {
-                      ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                      ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                      ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
-                      ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
-                      else -> return bitmap
-                  }
-                  Bitmap.createBitmap(
-                      bitmap,
-                      0,
-                      0,
-                      bitmap.width,
-                      bitmap.height,
-                      matrix,
-                      true
-                  ).also {
-                      if (it !== bitmap) bitmap.recycle()
-                  }
-              } catch (_: Exception) {
-                  null
-              }
-          }
-          '''
-
-          normalized = text[:start] + replacement
-          path.write_text(normalized, encoding="utf-8")
           PY
 
-          if grep -q 'private fun decodePreview(path: String): Bitmap? = try' app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt; then
-            echo "decodePreview() was not normalized"
-            exit 1
-          fi
+      - name: Verify camera source wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
+          required = [
+              "currentLens: Int,",
+              "CameraScreen(\n            mode,",
+              "currentLens,\n            onPreviewReady,",
+              "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
+          PY
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
