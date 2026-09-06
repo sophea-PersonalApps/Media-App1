@@ -92,6 +92,13 @@ class ScannerActivity : ComponentActivity() {
     private var cameraBindRequested = false
     private val savingPdf = AtomicBoolean(false)
 
+    companion object {
+        private const val STATE_PAGE_PATHS = "scanner_page_paths"
+        private const val STATE_SHOWING_PREVIEW = "scanner_showing_preview"
+        private const val STATE_LENS_FACING = "scanner_lens_facing"
+        private const val SESSION_DIR = "scanner-session"
+    }
+
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> cameraPermissionGranted = granted; if (granted) bindCamera() }
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri == null) return@registerForActivityResult
@@ -103,10 +110,27 @@ class ScannerActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        restoreScannerState(savedInstanceState)
         cameraPermissionGranted = hasCameraPermission()
         applyKeepScreenOnPreference()
         selectedFolderName = currentFolderName()
         setContent { MaterialTheme { ScannerApp(pages, cameraPermissionGranted, showingPreview, selectedFolderName, { cameraPermission.launch(Manifest.permission.CAMERA) }, { previewView = it; cameraBindRequested = true; if (cameraPermissionGranted && !showingPreview) bindCamera() }, ::capturePage, ::deletePage, { if (pages.isNotEmpty()) { cameraProvider?.unbindAll(); showingPreview = true } }, ::finish, { showingPreview = false; cameraBindRequested = true; if (cameraPermissionGranted) bindCamera() }, ::flipCamera, { folderPicker.launch(null) }, ::savePdf) } }
+    }
+
+    private fun restoreScannerState(savedInstanceState: Bundle?) {
+        val restoredPaths = savedInstanceState?.getStringArrayList(STATE_PAGE_PATHS).orEmpty()
+            .filter { path -> File(path).isFile && File(path).length() > 0L }
+        pages.clear()
+        pages.addAll(restoredPaths)
+        showingPreview = savedInstanceState?.getBoolean(STATE_SHOWING_PREVIEW, false) == true && pages.isNotEmpty()
+        lensFacing = savedInstanceState?.getInt(STATE_LENS_FACING, CameraSelector.LENS_FACING_BACK) ?: CameraSelector.LENS_FACING_BACK
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putStringArrayList(STATE_PAGE_PATHS, ArrayList(pages))
+        outState.putBoolean(STATE_SHOWING_PREVIEW, showingPreview)
+        outState.putInt(STATE_LENS_FACING, lensFacing)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -129,12 +153,13 @@ class ScannerActivity : ComponentActivity() {
     private fun bindCamera() {
         val view = previewView ?: return; if (!hasCameraPermission() || showingPreview) return
         val future = ProcessCameraProvider.getInstance(this)
-        future.addListener({ try { val provider = future.get(); cameraProvider = provider; val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }; val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build(); val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build(); provider.unbindAll(); imageCapture = capture; provider.bindToLifecycle(this, selector, preview, capture) } catch (_: Exception) { imageCapture = null; runOnUiThread { Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show() } } }, ContextCompat.getMainExecutor(this))
+        future.addListener({ try { val provider = future.get(); cameraProvider = provider; val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }; val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build(); val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build(); provider.unbindAll(); imageCapture = capture; provider.bindToLifecycle(this, selector, preview, capture) } catch (_: Exception) { imageCapture = null; runOnUiThread { Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show() } }, ContextCompat.getMainExecutor(this))
     }
 
     private fun capturePage() {
         val capture = imageCapture ?: run { Toast.makeText(this, "Scanner camera is not ready", Toast.LENGTH_SHORT).show(); bindCamera(); return }
-        val file = File(cacheDir, "scan_${System.currentTimeMillis()}.jpg")
+        val sessionDir = File(filesDir, SESSION_DIR).apply { mkdirs() }
+        val file = File(sessionDir, "scan_${System.currentTimeMillis()}.jpg")
         capture.takePicture(ImageCapture.OutputFileOptions.Builder(file).build(), cameraExecutor, object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result: ImageCapture.OutputFileResults) { runOnUiThread { if (file.exists() && file.length() > 0L) pages.add(file.absolutePath) else { file.delete(); Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() } } }
             override fun onError(exception: ImageCaptureException) { file.delete(); runOnUiThread { Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show() } }
