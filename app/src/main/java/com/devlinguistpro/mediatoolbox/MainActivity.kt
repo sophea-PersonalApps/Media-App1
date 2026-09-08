@@ -80,19 +80,22 @@ class MainActivity : ComponentActivity() {
     private var flashAvailable by mutableStateOf(false)
     private var pendingVideoRecording = false
     private var cameraBindRequestId = 0L
+    private var cameraBindingInProgress = false
+    private var boundMode: CameraSectionMode? = null
+    private var boundLens: Int? = null
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
-        if (granted) bindCamera()
+        if (granted && !isFinishing && !isDestroyed) bindCamera()
     }
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (pendingVideoRecording) {
-            if (granted && currentMode == CameraSectionMode.VIDEO && !isFinishing) startVideoRecording()
-            else {
-                pendingVideoRecording = false
-                if (!granted) Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
-            }
+        if (!pendingVideoRecording || isFinishing || isDestroyed) return@registerForActivityResult
+        if (granted && currentMode == CameraSectionMode.VIDEO) {
+            startVideoRecording()
+        } else {
+            pendingVideoRecording = false
+            if (!granted) Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -137,10 +140,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onResume() {
-        super.onResume(); applyKeepScreenOnPreference()
+        super.onResume()
+        applyKeepScreenOnPreference()
         val granted = hasCameraPermission()
         if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
-        if (granted && previewView != null) bindCamera()
+        if (granted && previewView != null && cameraProvider == null) bindCamera()
     }
 
     private fun applyKeepScreenOnPreference() {
@@ -152,112 +156,266 @@ class MainActivity : ComponentActivity() {
     private fun hasAudioPermission(): Boolean = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
     private fun changeMode(mode: CameraSectionMode) {
-        if (activeRecording != null && mode != CameraSectionMode.VIDEO) { activeRecording?.stop(); activeRecording = null }
+        if (mode == currentMode && (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO)) return
+        if (activeRecording != null && mode != CameraSectionMode.VIDEO) {
+            pendingVideoRecording = false
+            activeRecording?.stop()
+            returnToCameraModeAfterRecordingStop(mode)
+            return
+        }
         pendingVideoRecording = false
         when (mode) {
-            CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> { currentMode = mode; bindCamera() }
+            CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> {
+                currentMode = mode
+                bindCamera(forceRebind = true)
+            }
             CameraSectionMode.SCAN -> startActivity(Intent(this, ScannerActivity::class.java))
             CameraSectionMode.QR -> startActivity(Intent(this, QrScannerActivity::class.java))
         }
     }
 
-    private fun bindCamera() {
+    private fun returnToCameraModeAfterRecordingStop(mode: CameraSectionMode) {
+        when (mode) {
+            CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> {
+                currentMode = mode
+                bindCamera(forceRebind = true)
+            }
+            else -> Unit
+        }
+    }
+
+    private fun bindCamera(forceRebind: Boolean = false) {
         val view = previewView ?: return
-        if (!hasCameraPermission() || isFinishing || isDestroyed) return
+        if (!hasCameraPermission() || isFinishing || isDestroyed || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
+        if (!forceRebind && cameraBindingInProgress) return
+        if (!forceRebind && cameraProvider != null && boundMode == currentMode && boundLens == currentLens &&
+            ((currentMode == CameraSectionMode.PHOTO && imageCapture != null) || (currentMode == CameraSectionMode.VIDEO && videoCapture != null))) return
+
         val requestId = ++cameraBindRequestId
+        cameraBindingInProgress = true
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            if (requestId != cameraBindRequestId || isFinishing || isDestroyed) return@addListener
+            if (requestId != cameraBindRequestId || isFinishing || isDestroyed || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                if (requestId == cameraBindRequestId) cameraBindingInProgress = false
+                return@addListener
+            }
             try {
-                val provider = future.get(); cameraProvider = provider
+                val provider = future.get()
+                cameraProvider = provider
                 val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
                 val selector = CameraSelector.Builder().requireLensFacing(currentLens).build()
-                provider.unbindAll(); imageCapture = null; videoCapture = null; flashAvailable = false
-                if (currentMode == CameraSectionMode.PHOTO) {
-                    val capture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).setFlashMode(
-                        when (flashSetting) { FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF; FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO; FlashSetting.ON -> ImageCapture.FLASH_MODE_ON }
-                    ).build()
-                    imageCapture = capture
-                    val camera = provider.bindToLifecycle(this, selector, preview, capture)
-                    flashAvailable = camera.cameraInfo.hasFlashUnit()
-                    if (!flashAvailable && flashSetting != FlashSetting.OFF) {
-                        flashSetting = FlashSetting.OFF; provider.unbindAll()
-                        val safeCapture = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).setFlashMode(ImageCapture.FLASH_MODE_OFF).build()
-                        imageCapture = safeCapture; provider.bindToLifecycle(this, selector, preview, safeCapture)
+                provider.unbindAll()
+                imageCapture = null
+                videoCapture = null
+                flashAvailable = false
+
+                when (currentMode) {
+                    CameraSectionMode.PHOTO -> {
+                        val capture = ImageCapture.Builder()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                            .setFlashMode(
+                                when (flashSetting) {
+                                    FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
+                                    FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
+                                    FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
+                                }
+                            ).build()
+                        imageCapture = capture
+                        val camera = provider.bindToLifecycle(this, selector, preview, capture)
+                        flashAvailable = camera.cameraInfo.hasFlashUnit()
+                        if (!flashAvailable && flashSetting != FlashSetting.OFF) {
+                            flashSetting = FlashSetting.OFF
+                            provider.unbindAll()
+                            val safeCapture = ImageCapture.Builder()
+                                .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                                .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                                .build()
+                            imageCapture = safeCapture
+                            provider.bindToLifecycle(this, selector, preview, safeCapture)
+                        }
                     }
-                } else {
-                    val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD))).build()
-                    val video = VideoCapture.withOutput(recorder); videoCapture = video
-                    provider.bindToLifecycle(this, selector, preview, video)
-                    if (currentMode == CameraSectionMode.VIDEO && pendingVideoRecording && hasAudioPermission()) startVideoRecording()
+                    CameraSectionMode.VIDEO -> {
+                        val recorder = Recorder.Builder()
+                            .setQualitySelector(
+                                QualitySelector.from(
+                                    Quality.HIGHEST,
+                                    androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD)
+                                )
+                            ).build()
+                        val video = VideoCapture.withOutput(recorder)
+                        videoCapture = video
+                        provider.bindToLifecycle(this, selector, preview, video)
+                        if (pendingVideoRecording && hasAudioPermission()) startVideoRecording()
+                    }
+                    CameraSectionMode.SCAN, CameraSectionMode.QR -> Unit
                 }
+                boundMode = currentMode
+                boundLens = currentLens
             } catch (_: Exception) {
-                imageCapture = null; videoCapture = null; flashAvailable = false
+                imageCapture = null
+                videoCapture = null
+                flashAvailable = false
+                boundMode = null
+                boundLens = null
+                pendingVideoRecording = false
                 runOnUiThread { Toast.makeText(this, "Camera could not start", Toast.LENGTH_SHORT).show() }
+            } finally {
+                if (requestId == cameraBindRequestId) cameraBindingInProgress = false
             }
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun cycleFlash() {
         if (activeRecording != null || !flashAvailable || currentMode != CameraSectionMode.PHOTO) return
-        flashSetting = when (flashSetting) { FlashSetting.OFF -> FlashSetting.AUTO; FlashSetting.AUTO -> FlashSetting.ON; FlashSetting.ON -> FlashSetting.OFF }
-        bindCamera()
+        flashSetting = when (flashSetting) {
+            FlashSetting.OFF -> FlashSetting.AUTO
+            FlashSetting.AUTO -> FlashSetting.ON
+            FlashSetting.ON -> FlashSetting.OFF
+        }
+        bindCamera(forceRebind = true)
     }
 
     private fun flipCamera() {
-        if (activeRecording != null) return
+        if (activeRecording != null || isFinishing || isDestroyed) return
         currentLens = if (currentLens == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         if (currentLens == CameraSelector.LENS_FACING_FRONT) flashSetting = FlashSetting.OFF
-        bindCamera()
+        bindCamera(forceRebind = true)
     }
 
     private fun capturePhoto() {
         val capture = imageCapture
-        if (capture == null || currentMode != CameraSectionMode.PHOTO) { Toast.makeText(this, "Camera is not ready", Toast.LENGTH_SHORT).show(); return }
+        if (capture == null || currentMode != CameraSectionMode.PHOTO || isFinishing || isDestroyed) {
+            Toast.makeText(this, "Camera is not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
         val values = ContentValues().apply {
-            put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_$timestamp.jpg"); put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            if (Build.VERSION.SDK_INT >= 29) { put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox"); put(MediaStore.Images.Media.IS_PENDING, 1) }
+            put(MediaStore.Images.Media.DISPLAY_NAME, "IMG_$timestamp.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= 29) {
+                put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
         }
         val output = ImageCapture.OutputFileOptions.Builder(contentResolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values).build()
         capture.takePicture(output, cameraExecutor, object : ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                val uri = result.savedUri ?: run { runOnUiThread { Toast.makeText(this@MainActivity, "Photo was captured but could not be saved", Toast.LENGTH_LONG).show() }; return }
-                try { if (Build.VERSION.SDK_INT >= 29) contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null) }
-                catch (_: Exception) { contentResolver.delete(uri, null, null); runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() } }
+                val uri = result.savedUri ?: run {
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Photo was captured but could not be saved", Toast.LENGTH_LONG).show() }
+                    return
+                }
+                try {
+                    if (Build.VERSION.SDK_INT >= 29) {
+                        contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                    }
+                } catch (_: Exception) {
+                    contentResolver.delete(uri, null, null)
+                    runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() }
+                }
             }
-            override fun onError(exception: ImageCaptureException) { runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_SHORT).show() } }
+            override fun onError(exception: ImageCaptureException) {
+                runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_SHORT).show() }
+            }
         })
     }
 
     private fun toggleVideoRecording() {
-        if (currentMode != CameraSectionMode.VIDEO) return
-        activeRecording?.let { pendingVideoRecording = false; it.stop(); return }
+        if (currentMode != CameraSectionMode.VIDEO || isFinishing || isDestroyed) return
+        activeRecording?.let {
+            pendingVideoRecording = false
+            it.stop()
+            return
+        }
         pendingVideoRecording = true
-        if (!hasAudioPermission()) { audioPermission.launch(Manifest.permission.RECORD_AUDIO); return }
+        if (!hasAudioPermission()) {
+            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
         startVideoRecording()
     }
 
     private fun startVideoRecording() {
-        if (currentMode != CameraSectionMode.VIDEO || activeRecording != null) return
-        if (!hasAudioPermission()) { pendingVideoRecording = true; audioPermission.launch(Manifest.permission.RECORD_AUDIO); return }
-        val capture = videoCapture ?: run { pendingVideoRecording = true; bindCamera(); return }
+        if (currentMode != CameraSectionMode.VIDEO || activeRecording != null || isFinishing || isDestroyed ||
+            !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
+        if (!hasAudioPermission()) {
+            pendingVideoRecording = true
+            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
+            return
+        }
+        val capture = videoCapture
+        if (capture == null || boundMode != CameraSectionMode.VIDEO || boundLens != currentLens) {
+            pendingVideoRecording = true
+            bindCamera(forceRebind = true)
+            return
+        }
+
         pendingVideoRecording = false
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
-        if (Build.VERSION.SDK_INT >= 29) {
-            val values = ContentValues().apply { put(MediaStore.Video.Media.DISPLAY_NAME, "VID_$timestamp.mp4"); put(MediaStore.Video.Media.MIME_TYPE, "video/mp4"); put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox"); put(MediaStore.Video.Media.IS_PENDING, 1) }
-            val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
-            activeRecording = capture.output.prepareRecording(this, output).withAudioEnabled().start(ContextCompat.getMainExecutor(this)) { event ->
+        if (Build.VERSION.SDK_INT < 29) {
+            Toast.makeText(this, "Video recording requires Android 10 or newer", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        val values = ContentValues().apply {
+            put(MediaStore.Video.Media.DISPLAY_NAME, "VID_$timestamp.mp4")
+            put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
+            put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox")
+            put(MediaStore.Video.Media.IS_PENDING, 1)
+        }
+        val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
+            .setContentValues(values)
+            .build()
+
+        try {
+            val pending = capture.output.prepareRecording(this, output).withAudioEnabled()
+            activeRecording = pending.start(ContextCompat.getMainExecutor(this)) { event ->
                 if (event is VideoRecordEvent.Finalize) {
                     activeRecording = null
-                    if (event.hasError()) contentResolver.delete(event.outputResults.outputUri, null, null) else try { contentResolver.update(event.outputResults.outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null) } catch (_: Exception) { contentResolver.delete(event.outputResults.outputUri, null, null) }
+                    val uri = event.outputResults.outputUri
+                    if (event.hasError()) {
+                        contentResolver.delete(uri, null, null)
+                    } else {
+                        try {
+                            contentResolver.update(
+                                uri,
+                                ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
+                                null,
+                                null
+                            )
+                        } catch (_: Exception) {
+                            contentResolver.delete(uri, null, null)
+                        }
+                    }
                 }
             }
-        } else Toast.makeText(this, "Video recording requires Android 10 or newer", Toast.LENGTH_LONG).show()
+        } catch (_: Exception) {
+            pendingVideoRecording = false
+            activeRecording = null
+            contentResolver.delete(output.contentValues?.let { null } ?: android.net.Uri.EMPTY, null, null)
+            runOnUiThread { Toast.makeText(this, "Could not start video recording", Toast.LENGTH_SHORT).show() }
+        }
     }
 
-    override fun onStop() { pendingVideoRecording = false; activeRecording?.stop(); activeRecording = null; super.onStop() }
-    override fun onDestroy() { pendingVideoRecording = false; activeRecording?.stop(); activeRecording = null; cameraProvider?.unbindAll(); cameraBindRequestId++; cameraExecutor.shutdown(); super.onDestroy() }
+    override fun onStop() {
+        pendingVideoRecording = false
+        activeRecording?.stop()
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        pendingVideoRecording = false
+        activeRecording?.stop()
+        cameraBindRequestId++
+        cameraProvider?.unbindAll()
+        cameraProvider = null
+        imageCapture = null
+        videoCapture = null
+        boundMode = null
+        boundLens = null
+        cameraBindingInProgress = false
+        cameraExecutor.shutdown()
+        super.onDestroy()
+    }
 }
 
 @Composable
@@ -308,7 +466,19 @@ private fun CameraScreen(
     var showCaptureFlash by remember { mutableStateOf(false) }
     LaunchedEffect(showCaptureFlash) { if (showCaptureFlash) { kotlinx.coroutines.delay(120); showCaptureFlash = false } }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(factory = { PreviewView(context).apply { scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
+        AndroidView(
+            factory = {
+                PreviewView(context).apply {
+                    scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
+                    implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                    onPreviewReady(this)
+                }
+            },
+            update = { view ->
+                view.scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
+            },
+            modifier = Modifier.fillMaxSize()
+        )
         if (showCaptureFlash && mode == CameraSectionMode.PHOTO) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.88f)))
         Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
             var drag = 0f
