@@ -35,32 +35,29 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Validate and normalize scanner source
+      - name: Validate scanner source
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
-          text = path.read_text(encoding="utf-8")
-          if "private fun decodePreview(path: String): Bitmap?" not in text:
-              raise SystemExit("ScannerActivity.kt is missing decodePreview()")
-          replacements = {
-              "onOpenCamera = ::openCamera": "onOpenCamera = { startActivity(Intent(this, MainActivity::class.java)) }",
-              "onOpenGallery = ::openGallery": "onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) }",
-              "onOpenQr = ::openQr": "onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)) }",
-          }
-          for old, new in replacements.items(): text = text.replace(old, new)
-          lines = text.splitlines(keepends=True)
-          text = "".join(line for line in lines if "pathEffect = PathEffect.dashPathEffect" not in line)
-          path.write_text(text, encoding="utf-8")
-          PY
-
-          python3 - <<'PY'
-          from pathlib import Path
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
-          forbidden = ["onOpenCamera = ::openCamera", "onOpenGallery = ::openGallery", "onOpenQr = ::openQr", "pathEffect = PathEffect.dashPathEffect"]
-          remaining = [item for item in forbidden if item in text]
-          if remaining: raise SystemExit("Scanner source normalization incomplete: " + repr(remaining))
+          required = [
+              "private fun decodePreview(path: String): Bitmap?",
+              "startActivity(Intent(this, MainActivity::class.java))",
+              "startActivity(Intent(this, GalleryActivity::class.java))",
+              "startActivity(Intent(this, QrScannerActivity::class.java))",
+          ]
+          missing = [item for item in required if item not in text]
+          forbidden = [
+              "onOpenCamera = ::openCamera",
+              "onOpenGallery = ::openGallery",
+              "onOpenQr = ::openQr",
+          ]
+          present_forbidden = [item for item in forbidden if item in text]
+          if missing:
+              raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
+          if present_forbidden:
+              raise SystemExit("Scanner source contains unresolved navigation callbacks: " + repr(present_forbidden))
           PY
 
       - name: Verify camera source wiring
