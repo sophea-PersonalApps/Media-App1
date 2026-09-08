@@ -80,6 +80,7 @@ class MainActivity : ComponentActivity() {
     private var flashSetting by mutableStateOf(FlashSetting.OFF)
     private var flashAvailable by mutableStateOf(false)
     private var pendingVideoRecording = false
+    private var cameraBindRequestId = 0L
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
@@ -88,9 +89,14 @@ class MainActivity : ComponentActivity() {
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (pendingVideoRecording) {
-            pendingVideoRecording = false
-            if (granted) startVideoRecording()
-            else Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
+            if (granted && currentMode == CameraMode.VIDEO && !isFinishing) {
+                startVideoRecording()
+            } else {
+                pendingVideoRecording = false
+                if (!granted) {
+                    Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -143,6 +149,7 @@ class MainActivity : ComponentActivity() {
             activeRecording?.stop()
             activeRecording = null
         }
+        pendingVideoRecording = false
         if (mode == CameraMode.SCAN) {
             startActivity(Intent(this, ScannerActivity::class.java))
             return
@@ -157,9 +164,11 @@ class MainActivity : ComponentActivity() {
 
     private fun bindCamera() {
         val view = previewView ?: return
-        if (!hasCameraPermission()) return
+        if (!hasCameraPermission() || isFinishing || isDestroyed) return
+        val requestId = ++cameraBindRequestId
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
+            if (requestId != cameraBindRequestId || isFinishing || isDestroyed) return@addListener
             try {
                 val provider = future.get()
                 cameraProvider = provider
@@ -202,6 +211,10 @@ class MainActivity : ComponentActivity() {
                     val video = VideoCapture.withOutput(recorder)
                     videoCapture = video
                     provider.bindToLifecycle(this, selector, preview, video)
+
+                    if (currentMode == CameraMode.VIDEO && pendingVideoRecording && hasAudioPermission()) {
+                        startVideoRecording()
+                    }
                 }
             } catch (_: Exception) {
                 imageCapture = null
@@ -263,7 +276,6 @@ class MainActivity : ComponentActivity() {
                     if (Build.VERSION.SDK_INT >= 29) {
                         contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
                     }
-                    runOnUiThread { Toast.makeText(this@MainActivity, "Photo saved", Toast.LENGTH_SHORT).show() }
                 } catch (_: Exception) {
                     contentResolver.delete(uri, null, null)
                     runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() }
@@ -279,11 +291,12 @@ class MainActivity : ComponentActivity() {
     private fun toggleVideoRecording() {
         if (currentMode != CameraMode.VIDEO) return
         activeRecording?.let {
+            pendingVideoRecording = false
             it.stop()
             return
         }
+        pendingVideoRecording = true
         if (!hasAudioPermission()) {
-            pendingVideoRecording = true
             audioPermission.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
@@ -292,10 +305,18 @@ class MainActivity : ComponentActivity() {
 
     private fun startVideoRecording() {
         if (currentMode != CameraMode.VIDEO || activeRecording != null) return
-        val capture = videoCapture ?: run {
-            Toast.makeText(this, "Video camera is not ready", Toast.LENGTH_SHORT).show()
+        if (!hasAudioPermission()) {
+            pendingVideoRecording = true
+            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
+        val capture = videoCapture
+        if (capture == null) {
+            pendingVideoRecording = true
+            bindCamera()
+            return
+        }
+        pendingVideoRecording = false
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
 
         if (Build.VERSION.SDK_INT >= 29) {
@@ -319,7 +340,6 @@ class MainActivity : ComponentActivity() {
                         } else {
                             try {
                                 contentResolver.update(event.outputResults.outputUri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null)
-                                Toast.makeText(this, "Video saved", Toast.LENGTH_SHORT).show()
                             } catch (_: Exception) {
                                 contentResolver.delete(event.outputResults.outputUri, null, null)
                                 Toast.makeText(this, "Could not finish saving video", Toast.LENGTH_LONG).show()
@@ -333,15 +353,18 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        pendingVideoRecording = false
         activeRecording?.stop()
         activeRecording = null
         super.onStop()
     }
 
     override fun onDestroy() {
+        pendingVideoRecording = false
         activeRecording?.stop()
         activeRecording = null
         cameraProvider?.unbindAll()
+        cameraBindRequestId++
         cameraExecutor.shutdown()
         super.onDestroy()
     }
