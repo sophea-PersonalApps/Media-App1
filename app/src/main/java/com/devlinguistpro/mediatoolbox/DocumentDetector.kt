@@ -18,14 +18,7 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Local, offline document boundary detector.
- *
- * It uses OpenCV contours rather than assuming that a page is axis-aligned. The same
- * detector is used for the live camera preview and for the captured image so the
- * rectangle shown to the user and the crop applied to the saved page use the same
- * geometry.
- */
+/** Local, offline document boundary detector. */
 object DocumentDetector {
     data class Quad(
         val topLeft: PointF,
@@ -38,6 +31,7 @@ object DocumentDetector {
     )
 
     private val openCvReady by lazy { OpenCVLoader.initLocal() }
+    private val stateLock = Any()
     private var stableCandidate: Quad? = null
     private var stableFrames = 0
     private var lastFrameTime = 0L
@@ -59,19 +53,26 @@ object DocumentDetector {
         val width = image.width
         val height = image.height
         if (width < 160 || height < 160) return null
-
         val gray = Mat(height, width, org.opencv.core.CvType.CV_8UC1)
         return try {
             copyPlane(plane.buffer, plane.rowStride, plane.pixelStride, width, height, gray)
-            val candidate = detectGray(gray, width, height)
-            stabilize(candidate)
+            stabilize(detectGray(gray, width, height))
         } finally {
             gray.release()
         }
     }
 
+    /** Clears temporal state when the camera is torn down or the lens is changed. */
+    fun reset() {
+        synchronized(stateLock) {
+            stableCandidate = null
+            stableFrames = 0
+            lastFrameTime = 0L
+        }
+    }
+
     fun warp(bitmap: Bitmap, quad: Quad, maxSide: Int = 2200): Bitmap? {
-        if (!openCvReady) return null
+        if (!openCvReady || quad.width <= 0 || quad.height <= 0) return null
         val src = Mat()
         val sourceQuad = MatOfPoint2f(
             Point(quad.topLeft.x.toDouble(), quad.topLeft.y.toDouble()),
@@ -162,7 +163,6 @@ object DocumentDetector {
                             val longestSide = sideLengths.maxOrNull() ?: continue
                             if (shortestSide < min(work.cols(), work.rows()) * 0.12) continue
                             if (longestSide / shortestSide > 4.5) continue
-
                             val rectangularity = angleScore(ordered)
                             if (rectangularity < 0.55) continue
                             val sideConsistency = 1.0 - min(
@@ -186,55 +186,47 @@ object DocumentDetector {
                                 )
                             }
                         } finally {
-                            contour2f.release()
-                            approximation.release()
-                            convex.release()
+                            contour2f.release(); approximation.release(); convex.release()
                         }
                     }
                     return best
                 } finally {
-                    hierarchy.release()
-                    contours.forEach { it.release() }
+                    hierarchy.release(); contours.forEach { it.release() }
                 }
-            } finally {
-                edges.release()
-            }
-        } finally {
-            work.release()
-        }
+            } finally { edges.release() }
+        } finally { work.release() }
     }
 
     private fun stabilize(candidate: Quad?): Quad? {
-        val now = System.currentTimeMillis()
-        if (now - lastFrameTime > 500L) {
-            stableCandidate = null
-            stableFrames = 0
+        synchronized(stateLock) {
+            val now = System.currentTimeMillis()
+            if (now - lastFrameTime > 500L) {
+                stableCandidate = null
+                stableFrames = 0
+            }
+            lastFrameTime = now
+            if (candidate == null) {
+                stableFrames = 0
+                stableCandidate = null
+                return null
+            }
+            val previous = stableCandidate
+            if (previous != null && similar(previous, candidate)) {
+                stableFrames++
+                stableCandidate = blend(previous, candidate)
+            } else {
+                stableCandidate = candidate
+                stableFrames = 1
+            }
+            return if (stableFrames >= 2) stableCandidate else null
         }
-        lastFrameTime = now
-        if (candidate == null) {
-            stableFrames = 0
-            stableCandidate = null
-            return null
-        }
-        val previous = stableCandidate
-        if (previous != null && similar(previous, candidate)) {
-            stableFrames++
-            stableCandidate = blend(previous, candidate)
-        } else {
-            stableCandidate = candidate
-            stableFrames = 1
-        }
-        return if (stableFrames >= 2) stableCandidate else null
     }
 
     private fun similar(a: Quad, b: Quad): Boolean {
         if (a.width != b.width || a.height != b.height) return false
-        val toleranceX = a.width * 0.08f
-        val toleranceY = a.height * 0.08f
-        return distance(a.topLeft, b.topLeft) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
-            distance(a.topRight, b.topRight) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
-            distance(a.bottomRight, b.bottomRight) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
-            distance(a.bottomLeft, b.bottomLeft) < hypot(toleranceX.toDouble(), toleranceY.toDouble())
+        val tolerance = hypot(a.width * 0.08, a.height * 0.08)
+        return distance(a.topLeft, b.topLeft) < tolerance && distance(a.topRight, b.topRight) < tolerance &&
+            distance(a.bottomRight, b.bottomRight) < tolerance && distance(a.bottomLeft, b.bottomLeft) < tolerance
     }
 
     private fun blend(a: Quad, b: Quad): Quad = Quad(
@@ -242,9 +234,7 @@ object DocumentDetector {
         topRight = PointF((a.topRight.x + b.topRight.x) / 2f, (a.topRight.y + b.topRight.y) / 2f),
         bottomRight = PointF((a.bottomRight.x + b.bottomRight.x) / 2f, (a.bottomRight.y + b.bottomRight.y) / 2f),
         bottomLeft = PointF((a.bottomLeft.x + b.bottomLeft.x) / 2f, (a.bottomLeft.y + b.bottomLeft.y) / 2f),
-        confidence = max(a.confidence, b.confidence),
-        width = b.width,
-        height = b.height
+        confidence = max(a.confidence, b.confidence), width = b.width, height = b.height
     )
 
     private fun copyPlane(buffer: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int, destination: Mat) {
@@ -273,13 +263,9 @@ object DocumentDetector {
     private fun angleScore(points: Array<Point>): Double {
         var score = 0.0
         for (i in points.indices) {
-            val previous = points[(i + 3) % 4]
-            val current = points[i]
-            val next = points[(i + 1) % 4]
-            val ax = previous.x - current.x
-            val ay = previous.y - current.y
-            val bx = next.x - current.x
-            val by = next.y - current.y
+            val previous = points[(i + 3) % 4]; val current = points[i]; val next = points[(i + 1) % 4]
+            val ax = previous.x - current.x; val ay = previous.y - current.y
+            val bx = next.x - current.x; val by = next.y - current.y
             val denominator = max(1e-9, hypot(ax, ay) * hypot(bx, by))
             val cosine = ((ax * bx + ay * by) / denominator).coerceIn(-1.0, 1.0)
             val angle = acos(cosine)
