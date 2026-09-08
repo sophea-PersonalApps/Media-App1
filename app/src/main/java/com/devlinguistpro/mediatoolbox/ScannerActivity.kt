@@ -101,6 +101,8 @@ class ScannerActivity : ComponentActivity() {
     private var selectedFolderName by mutableStateOf(MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER)
     private var cameraPermissionGranted by mutableStateOf(false)
     private var cameraBindRequested = false
+    private var cameraBindGeneration = 0L
+    private var lifecycleActive = false
     private var captureInProgress = AtomicBoolean(false)
     private val savingPdf = AtomicBoolean(false)
     private var detectedQuad by mutableStateOf<DocumentDetector.Quad?>(null)
@@ -114,7 +116,7 @@ class ScannerActivity : ComponentActivity() {
 
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         cameraPermissionGranted = granted
-        if (granted && !isFinishing) bindCamera()
+        if (granted && lifecycleActive && !isFinishing) bindCamera()
     }
 
     private val folderPicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -154,16 +156,13 @@ class ScannerActivity : ComponentActivity() {
                     onPreviewReady = { view ->
                         previewView = view
                         cameraBindRequested = true
-                        if (cameraPermissionGranted && !showingPreview) bindCamera()
+                        if (cameraPermissionGranted && lifecycleActive && !showingPreview) bindCamera()
                     },
                     onCapture = ::capturePage,
                     onDeletePage = ::deletePage,
                     onFinish = {
                         if (pages.isNotEmpty()) {
-                            cameraProvider?.unbindAll()
-                            imageCapture = null
-                            imageAnalysis = null
-                            detectedQuad = null
+                            unbindCamera()
                             showingPreview = true
                         }
                     },
@@ -171,7 +170,7 @@ class ScannerActivity : ComponentActivity() {
                     onBackToScanner = {
                         showingPreview = false
                         cameraBindRequested = true
-                        if (cameraPermissionGranted) bindCamera()
+                        if (cameraPermissionGranted && lifecycleActive) bindCamera()
                     },
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
@@ -205,6 +204,7 @@ class ScannerActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        lifecycleActive = true
         applyKeepScreenOnPreference()
         val granted = hasCameraPermission()
         if (cameraPermissionGranted != granted) cameraPermissionGranted = granted
@@ -212,10 +212,8 @@ class ScannerActivity : ComponentActivity() {
     }
 
     override fun onPause() {
-        cameraProvider?.unbindAll()
-        imageCapture = null
-        imageAnalysis = null
-        detectedQuad = null
+        lifecycleActive = false
+        unbindCamera()
         super.onPause()
     }
 
@@ -229,16 +227,27 @@ class ScannerActivity : ComponentActivity() {
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
+    private fun unbindCamera() {
+        cameraBindGeneration++
+        imageAnalysis?.clearAnalyzer()
+        imageAnalysis = null
+        imageCapture = null
+        detectedQuad = null
+        cameraProvider?.unbindAll()
+    }
+
     private fun bindCamera() {
         val view = previewView ?: return
-        if (!hasCameraPermission() || showingPreview || isFinishing) return
+        if (!hasCameraPermission() || showingPreview || isFinishing || !lifecycleActive) return
 
+        val requestId = ++cameraBindGeneration
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
             try {
-                if (isFinishing || showingPreview) return@addListener
+                if (!lifecycleActive || isFinishing || showingPreview || requestId != cameraBindGeneration) return@addListener
                 val provider = future.get()
-                cameraProvider = provider
+                if (!lifecycleActive || isFinishing || showingPreview || requestId != cameraBindGeneration) return@addListener
+
                 val targetRotation = view.display?.rotation ?: android.view.Surface.ROTATION_0
                 val preview = Preview.Builder()
                     .setTargetRotation(targetRotation)
@@ -258,26 +267,36 @@ class ScannerActivity : ComponentActivity() {
                     try {
                         val quad = DocumentDetector.detect(image)
                         ContextCompat.getMainExecutor(this).execute {
-                            if (!isFinishing && !showingPreview) detectedQuad = quad
+                            if (lifecycleActive && !isFinishing && !showingPreview && requestId == cameraBindGeneration) {
+                                detectedQuad = quad
+                            }
                         }
                     } catch (_: Exception) {
                         ContextCompat.getMainExecutor(this).execute {
-                            if (!isFinishing && !showingPreview) detectedQuad = null
+                            if (lifecycleActive && !isFinishing && !showingPreview && requestId == cameraBindGeneration) {
+                                detectedQuad = null
+                            }
                         }
                     } finally {
                         image.close()
                     }
                 }
                 val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
+                if (!lifecycleActive || isFinishing || showingPreview || requestId != cameraBindGeneration) {
+                    analysis.clearAnalyzer()
+                    return@addListener
+                }
                 provider.unbindAll()
+                provider.bindToLifecycle(this, selector, preview, capture, analysis)
+                cameraProvider = provider
                 imageCapture = capture
                 imageAnalysis = analysis
-                provider.bindToLifecycle(this, selector, preview, capture, analysis)
             } catch (_: Exception) {
+                if (requestId != cameraBindGeneration) return@addListener
                 imageCapture = null
                 imageAnalysis = null
                 detectedQuad = null
-                if (!isFinishing) Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show()
+                if (lifecycleActive && !isFinishing) Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
     }
@@ -285,10 +304,10 @@ class ScannerActivity : ComponentActivity() {
     private fun capturePage() {
         val capture = imageCapture ?: run {
             Toast.makeText(this, "Scanner camera is not ready", Toast.LENGTH_SHORT).show()
-            bindCamera()
+            if (lifecycleActive) bindCamera()
             return
         }
-        if (!captureInProgress.compareAndSet(false, true)) return
+        if (!lifecycleActive || !captureInProgress.compareAndSet(false, true)) return
 
         val sessionDir = File(filesDir, SESSION_DIR).apply { mkdirs() }
         val rawFile = File(sessionDir, "raw_${System.currentTimeMillis()}.jpg")
@@ -301,18 +320,20 @@ class ScannerActivity : ComponentActivity() {
                         val processed = processDocument(rawFile)
                         rawFile.delete()
                         runOnUiThread {
-                            if (processed != null && processed.isFile && processed.length() > 0L) {
+                            if (isDestroyed) {
+                                processed?.delete()
+                            } else if (processed != null && processed.isFile && processed.length() > 0L) {
                                 pages.add(processed.absolutePath)
                             } else {
                                 processed?.delete()
-                                Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
+                                if (!isFinishing) Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
                             }
                             captureInProgress.set(false)
                         }
                     } catch (_: Exception) {
                         rawFile.delete()
                         runOnUiThread {
-                            Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
+                            if (!isDestroyed && !isFinishing) Toast.makeText(this@ScannerActivity, "Could not process page", Toast.LENGTH_SHORT).show()
                             captureInProgress.set(false)
                         }
                     }
@@ -322,7 +343,7 @@ class ScannerActivity : ComponentActivity() {
             override fun onError(exception: ImageCaptureException) {
                 rawFile.delete()
                 runOnUiThread {
-                    Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
+                    if (!isDestroyed && !isFinishing) Toast.makeText(this@ScannerActivity, "Could not capture page", Toast.LENGTH_SHORT).show()
                     captureInProgress.set(false)
                 }
             }
@@ -393,14 +414,14 @@ class ScannerActivity : ComponentActivity() {
     }
 
     private fun flipCamera() {
-        if (savingPdf.get() || captureInProgress.get()) return
+        if (savingPdf.get() || captureInProgress.get() || !lifecycleActive) return
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {
             CameraSelector.LENS_FACING_BACK
         }
-        detectedQuad = null
-        bindCamera()
+        unbindCamera()
+        if (cameraPermissionGranted && !showingPreview) bindCamera()
     }
 
     private fun currentFolderName(): String = getSharedPreferences(MediaToolboxPrefs.PREFS, MODE_PRIVATE)
@@ -508,7 +529,8 @@ class ScannerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        cameraProvider?.unbindAll()
+        lifecycleActive = false
+        unbindCamera()
         cameraExecutor.shutdown()
         processingExecutor.shutdown()
         if (isFinishing) clearPages()
