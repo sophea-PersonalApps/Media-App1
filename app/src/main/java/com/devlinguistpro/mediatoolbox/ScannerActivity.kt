@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.RectF
 import android.graphics.pdf.PdfDocument
 import android.net.Uri
@@ -19,10 +20,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceRequest
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
@@ -46,7 +47,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -94,6 +94,7 @@ class ScannerActivity : ComponentActivity() {
     private var cameraProvider: ProcessCameraProvider? = null
     private var imageCapture: ImageCapture? = null
     private var previewView: PreviewView? = null
+    private var imageAnalysis: ImageAnalysis? = null
     private val pages = mutableStateListOf<String>()
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var showingPreview by mutableStateOf(false)
@@ -102,6 +103,7 @@ class ScannerActivity : ComponentActivity() {
     private var cameraBindRequested = false
     private var captureInProgress = AtomicBoolean(false)
     private val savingPdf = AtomicBoolean(false)
+    private var detectedQuad by mutableStateOf<DocumentDetector.Quad?>(null)
 
     companion object {
         private const val STATE_PAGE_PATHS = "scanner_page_paths"
@@ -147,6 +149,7 @@ class ScannerActivity : ComponentActivity() {
                     hasCameraPermission = cameraPermissionGranted,
                     showingPreview = showingPreview,
                     folderName = selectedFolderName,
+                    detectedQuad = detectedQuad,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     onPreviewReady = { view ->
                         previewView = view
@@ -159,6 +162,8 @@ class ScannerActivity : ComponentActivity() {
                         if (pages.isNotEmpty()) {
                             cameraProvider?.unbindAll()
                             imageCapture = null
+                            imageAnalysis = null
+                            detectedQuad = null
                             showingPreview = true
                         }
                     },
@@ -171,9 +176,9 @@ class ScannerActivity : ComponentActivity() {
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
                     onSave = ::savePdf,
-                    onOpenCamera = ::openCamera,
-                    onOpenGallery = ::openGallery,
-                    onOpenQr = ::openQr
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java)) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
+                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)) }
                 )
             }
         }
@@ -209,6 +214,8 @@ class ScannerActivity : ComponentActivity() {
     override fun onPause() {
         cameraProvider?.unbindAll()
         imageCapture = null
+        imageAnalysis = null
+        detectedQuad = null
         super.onPause()
     }
 
@@ -232,19 +239,44 @@ class ScannerActivity : ComponentActivity() {
                 if (isFinishing || showingPreview) return@addListener
                 val provider = future.get()
                 cameraProvider = provider
+                val targetRotation = view.display?.rotation ?: android.view.Surface.ROTATION_0
                 val preview = Preview.Builder()
+                    .setTargetRotation(targetRotation)
                     .build()
                     .also { it.surfaceProvider = view.surfaceProvider }
                 val capture = ImageCapture.Builder()
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setTargetRotation(view.display?.rotation ?: android.view.Surface.ROTATION_0)
+                    .setTargetRotation(targetRotation)
                     .build()
+                val analysis = ImageAnalysis.Builder()
+                    .setTargetResolution(android.util.Size(640, 480))
+                    .setTargetRotation(targetRotation)
+                    .setOutputImageRotationEnabled(true)
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                analysis.setAnalyzer(processingExecutor) { image ->
+                    try {
+                        val quad = DocumentDetector.detect(image)
+                        ContextCompat.getMainExecutor(this).execute {
+                            if (!isFinishing && !showingPreview) detectedQuad = quad
+                        }
+                    } catch (_: Exception) {
+                        ContextCompat.getMainExecutor(this).execute {
+                            if (!isFinishing && !showingPreview) detectedQuad = null
+                        }
+                    } finally {
+                        image.close()
+                    }
+                }
                 val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
                 provider.unbindAll()
                 imageCapture = capture
-                provider.bindToLifecycle(this, selector, preview, capture)
+                imageAnalysis = analysis
+                provider.bindToLifecycle(this, selector, preview, capture, analysis)
             } catch (_: Exception) {
                 imageCapture = null
+                imageAnalysis = null
+                detectedQuad = null
                 if (!isFinishing) Toast.makeText(this, "Scanner camera could not start", Toast.LENGTH_SHORT).show()
             }
         }, ContextCompat.getMainExecutor(this))
@@ -299,32 +331,27 @@ class ScannerActivity : ComponentActivity() {
 
     private fun processDocument(rawFile: File): File? {
         if (!rawFile.isFile || rawFile.length() == 0L) return null
-        val source = decodeBitmap(rawFile, 1800) ?: return null
+        val source = decodeBitmap(rawFile, 2200) ?: return null
         val rotated = rotateFromExif(rawFile, source)
         if (rotated !== source) source.recycle()
 
-        val bounds = detectPageBounds(rotated)
-        val cropped = try {
-            Bitmap.createBitmap(rotated, bounds.left, bounds.top, bounds.width(), bounds.height())
-        } catch (_: Exception) {
-            null
-        }
-        if (cropped == null) {
-            rotated.recycle()
-            return null
-        }
-        if (cropped !== rotated) rotated.recycle()
+        val detected = DocumentDetector.detect(rotated)
+        val corrected = if (detected != null && detected.confidence >= 0.45f) {
+            DocumentDetector.warp(rotated, detected, 2200)
+        } else null
+        val pageBitmap = corrected ?: rotated
+        if (pageBitmap !== rotated) rotated.recycle()
 
         val sessionDir = File(filesDir, SESSION_DIR).apply { mkdirs() }
         val output = File(sessionDir, "page_${System.currentTimeMillis()}.jpg")
         return try {
             output.outputStream().use { stream ->
-                if (!cropped.compress(Bitmap.CompressFormat.JPEG, 94, stream)) throw IOException("JPEG encode failed")
+                if (!pageBitmap.compress(Bitmap.CompressFormat.JPEG, 94, stream)) throw IOException("JPEG encode failed")
             }
-            cropped.recycle()
+            pageBitmap.recycle()
             output
         } catch (_: Exception) {
-            cropped.recycle()
+            pageBitmap.recycle()
             output.delete()
             null
         }
@@ -359,64 +386,6 @@ class ScannerActivity : ComponentActivity() {
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
-    /**
-     * Finds the usable document rectangle without assuming a particular phone size.
-     * The detector looks for strong brightness transitions around the image edges.
-     * If no convincing page boundary exists, it deliberately falls back to the full
-     * corrected image instead of destroying document content with an aggressive crop.
-     */
-    private fun detectPageBounds(bitmap: Bitmap): android.graphics.Rect {
-        val w = bitmap.width
-        val h = bitmap.height
-        if (w < 100 || h < 100) return android.graphics.Rect(0, 0, w, h)
-
-        val sample = 4
-        val sw = w / sample
-        val sh = h / sample
-        val pixels = IntArray(sw * sh)
-        bitmap.getPixels(pixels, 0, sw, 0, 0, sw, sh)
-
-        fun lum(c: Int): Int = (Color.red(c) * 299 + Color.green(c) * 587 + Color.blue(c) * 114) / 1000
-        val rows = DoubleArray(sh - 1)
-        val cols = DoubleArray(sw - 1)
-        for (y in 0 until sh - 1) {
-            var total = 0L
-            for (x in 0 until sw) total += kotlin.math.abs(lum(pixels[y * sw + x]) - lum(pixels[(y + 1) * sw + x]))
-            rows[y] = total.toDouble() / sw
-        }
-        for (x in 0 until sw - 1) {
-            var total = 0L
-            for (y in 0 until sh) total += kotlin.math.abs(lum(pixels[y * sw + x]) - lum(pixels[y * sw + x + 1]))
-            cols[x] = total.toDouble() / sh
-        }
-
-        val top = strongestEdge(rows, 0, (sh * 0.45).toInt())
-        val bottom = strongestEdge(rows, (sh * 0.55).toInt(), sh - 1)
-        val left = strongestEdge(cols, 0, (sw * 0.45).toInt())
-        val right = strongestEdge(cols, (sw * 0.55).toInt(), sw - 1)
-
-        val minW = w * 0.45f
-        val minH = h * 0.45f
-        val rect = android.graphics.Rect(left * sample, top * sample, (right + 1) * sample, (bottom + 1) * sample)
-        val valid = rect.width() >= minW && rect.height() >= minH &&
-            rect.left > w * 0.015f && rect.top > h * 0.015f &&
-            rect.right < w * 0.985f && rect.bottom < h * 0.985f
-        return if (valid) rect else android.graphics.Rect(0, 0, w, h)
-    }
-
-    private fun strongestEdge(values: DoubleArray, start: Int, endExclusive: Int): Int {
-        if (values.isEmpty()) return 0
-        var best = start.coerceIn(0, values.lastIndex)
-        var bestValue = 0.0
-        for (i in start.coerceIn(0, values.lastIndex) until endExclusive.coerceAtMost(values.size)) {
-            if (values[i] > bestValue) {
-                bestValue = values[i]
-                best = i
-            }
-        }
-        return best
-    }
-
     private fun deletePage(index: Int) {
         if (savingPdf.get() || captureInProgress.get()) return
         if (index in pages.indices) File(pages.removeAt(index)).delete()
@@ -430,6 +399,7 @@ class ScannerActivity : ComponentActivity() {
         } else {
             CameraSelector.LENS_FACING_BACK
         }
+        detectedQuad = null
         bindCamera()
     }
 
@@ -552,6 +522,7 @@ private fun ScannerApp(
     hasCameraPermission: Boolean,
     showingPreview: Boolean,
     folderName: String,
+    detectedQuad: DocumentDetector.Quad?,
     onRequestPermission: () -> Unit,
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
@@ -574,7 +545,7 @@ private fun ScannerApp(
                 onOpenCamera, onOpenGallery, onOpenQr
             )
             else -> ScannerCapture(
-                pages, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip,
+                pages, detectedQuad, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip,
                 onOpenCamera, onOpenGallery, onOpenQr
             )
         }
@@ -601,6 +572,7 @@ private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
 @Composable
 private fun ScannerCapture(
     pages: List<String>,
+    detectedQuad: DocumentDetector.Quad?,
     onPreviewReady: (PreviewView) -> Unit,
     onCapture: () -> Unit,
     onDelete: (Int) -> Unit,
@@ -616,14 +588,14 @@ private fun ScannerCapture(
         AndroidView(
             factory = {
                 PreviewView(context).apply {
-                    scaleType = PreviewView.ScaleType.FILL_CENTER
+                    scaleType = PreviewView.ScaleType.FIT_CENTER
                     implementationMode = PreviewView.ImplementationMode.PERFORMANCE
                     onPreviewReady(this)
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
-        ScannerPageGuide()
+        ScannerPageGuide(detectedQuad)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
             Row(
                 Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp),
@@ -720,21 +692,42 @@ private fun ScannerPreview(
 }
 
 @Composable
-private fun ScannerPageGuide() {
+private fun ScannerPageGuide(quad: DocumentDetector.Quad?) {
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val pageWidth = (maxWidth * 0.82f).coerceAtMost(360.dp)
         val pageHeight = (pageWidth * 1.32f).coerceAtMost(maxHeight * 0.66f)
-        Canvas(Modifier.size(pageWidth, pageHeight)) {
-            drawRoundRect(
-                color = ComposeColor.White.copy(alpha = 0.8f),
-                topLeft = Offset.Zero,
-                size = androidx.compose.ui.geometry.Size(size.width, size.height),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(14f, 14f),
-                style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))
-            )
+        Canvas(Modifier.size(maxWidth, maxHeight)) {
+            if (quad == null) {
+                val left = (size.width - pageWidth.toPx()) / 2f
+                val top = (size.height - pageHeight.toPx()) / 2f
+                drawRoundRect(
+                    color = ComposeColor.White.copy(alpha = 0.8f),
+                    topLeft = Offset(left, top),
+                    size = androidx.compose.ui.geometry.Size(pageWidth.toPx(), pageHeight.toPx()),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(14f, 14f),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(18f, 12f))
+                )
+            } else {
+                val scale = minOf(size.width / quad.width.toFloat(), size.height / quad.height.toFloat())
+                val offsetX = (size.width - quad.width * scale) / 2f
+                val offsetY = (size.height - quad.height * scale) / 2f
+                val path = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(offsetX + quad.topLeft.x * scale, offsetY + quad.topLeft.y * scale)
+                    lineTo(offsetX + quad.topRight.x * scale, offsetY + quad.topRight.y * scale)
+                    lineTo(offsetX + quad.bottomRight.x * scale, offsetY + quad.bottomRight.y * scale)
+                    lineTo(offsetX + quad.bottomLeft.x * scale, offsetY + quad.bottomLeft.y * scale)
+                    close()
+                }
+                drawPath(path, color = ComposeColor.White.copy(alpha = 0.95f), style = androidx.compose.ui.graphics.drawscope.Stroke(width = 5f))
+            }
         }
-        Text("Align the page inside the guide", color = ComposeColor.White.copy(alpha = 0.9f), fontSize = 14.sp, modifier = Modifier.padding(top = pageHeight + 18.dp))
+        Text(
+            if (quad == null) "Align the page inside the guide" else "Page detected",
+            color = ComposeColor.White.copy(alpha = 0.9f),
+            fontSize = 14.sp,
+            modifier = Modifier.padding(top = pageHeight + 18.dp)
+        )
     }
 }
 
