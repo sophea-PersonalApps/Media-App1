@@ -3,8 +3,8 @@ package com.devlinguistpro.mediatoolbox
 import android.graphics.Bitmap
 import android.graphics.PointF
 import androidx.camera.core.ImageProxy
-import org.opencv.android.Utils
 import org.opencv.android.OpenCVLoader
+import org.opencv.android.Utils
 import org.opencv.core.Mat
 import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
@@ -12,6 +12,7 @@ import org.opencv.core.Point
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
 import java.nio.ByteBuffer
+import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -74,10 +75,11 @@ object DocumentDetector {
             Point(quad.bottomRight.x.toDouble(), quad.bottomRight.y.toDouble()),
             Point(quad.bottomLeft.x.toDouble(), quad.bottomLeft.y.toDouble())
         )
-        val sourceWidth = max(1.0, distance(sourceQuad.toArray()[0], sourceQuad.toArray()[1]))
-        val sourceWidthBottom = max(1.0, distance(sourceQuad.toArray()[3], sourceQuad.toArray()[2]))
-        val sourceHeight = max(1.0, distance(sourceQuad.toArray()[0], sourceQuad.toArray()[3]))
-        val sourceHeightRight = max(1.0, distance(sourceQuad.toArray()[1], sourceQuad.toArray()[2]))
+        val points = sourceQuad.toArray()
+        val sourceWidth = max(1.0, distance(points[0], points[1]))
+        val sourceWidthBottom = max(1.0, distance(points[3], points[2]))
+        val sourceHeight = max(1.0, distance(points[0], points[3]))
+        val sourceHeightRight = max(1.0, distance(points[1], points[2]))
         val targetWidth = max(1, min(maxSide, ((sourceWidth + sourceWidthBottom) / 2.0).toInt()))
         val targetHeight = max(1, min(maxSide, ((sourceHeight + sourceHeightRight) / 2.0).toInt()))
         val destinationQuad = MatOfPoint2f(
@@ -132,18 +134,18 @@ object DocumentDetector {
                     var best: Quad? = null
                     var bestScore = 0.0
                     for (contour in contours) {
-                        val area = absArea(Imgproc.contourArea(contour))
-                        if (area < imageArea * 0.12) {
-                            contour.release()
-                            continue
-                        }
+                        val area = abs(Imgproc.contourArea(contour))
+                        if (area < imageArea * 0.12) continue
                         val contour2f = MatOfPoint2f(*contour.toArray())
                         val approximation = MatOfPoint2f()
+                        val convex = MatOfPoint()
                         try {
                             val perimeter = Imgproc.arcLength(contour2f, true)
                             Imgproc.approxPolyDP(contour2f, approximation, perimeter * 0.025, true)
                             val points = approximation.toArray()
-                            if (points.size != 4 || !Imgproc.isContourConvex(MatOfPoint(*points))) continue
+                            if (points.size != 4) continue
+                            convex.fromArray(*points)
+                            if (!Imgproc.isContourConvex(convex)) continue
                             val ordered = order(points)
                             val rectangularity = angleScore(ordered)
                             val areaScore = (area / imageArea).coerceIn(0.0, 1.0)
@@ -156,7 +158,7 @@ object DocumentDetector {
                                     topRight = PointF((ordered[1].x / scale).toFloat(), (ordered[1].y / scale).toFloat()),
                                     bottomRight = PointF((ordered[2].x / scale).toFloat(), (ordered[2].y / scale).toFloat()),
                                     bottomLeft = PointF((ordered[3].x / scale).toFloat(), (ordered[3].y / scale).toFloat()),
-                                    confidence = bestScore.toFloat().coerceIn(0f, 1f),
+                                    confidence = score.toFloat().coerceIn(0f, 1f),
                                     width = width,
                                     height = height
                                 )
@@ -164,13 +166,13 @@ object DocumentDetector {
                         } finally {
                             contour2f.release()
                             approximation.release()
+                            convex.release()
                         }
-                        contour.release()
                     }
                     return best
                 } finally {
                     hierarchy.release()
-                    contours.forEach { if (!it.empty()) it.release() }
+                    contours.forEach { it.release() }
                 }
             } finally {
                 edges.release()
@@ -227,5 +229,4 @@ object DocumentDetector {
     }
 
     private fun distance(a: Point, b: Point): Double = hypot(a.x - b.x, a.y - b.y)
-    private fun absArea(value: Double): Double = kotlin.math.abs(value)
 }
