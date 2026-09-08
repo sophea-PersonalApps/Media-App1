@@ -30,11 +30,6 @@ jobs:
       - name: Install Android SDK platform
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.13'
-
       - name: Validate scanner source
         shell: bash
         run: |
@@ -43,7 +38,9 @@ jobs:
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
           required = [
               "private fun decodePreview(path: String): Bitmap?",
-              "startActivity(Intent(this, MainActivity::class.java))",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "startActivity(Intent(this, MainActivity::class.java)",
               "startActivity(Intent(this, GalleryActivity::class.java))",
               "startActivity(Intent(this, QrScannerActivity::class.java))",
           ]
@@ -66,7 +63,15 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
-          required = ["currentLens: Int,", "CameraScreen(\n            mode,", "currentLens,\n            onPreviewReady,", "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)"]
+          required = [
+              "currentLens: Int,",
+              "mode: CameraSectionMode",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "CameraSectionMode.SCAN",
+              "CameraSectionMode.QR",
+              "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
+          ]
           missing = [item for item in required if item not in text]
           if missing: raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
           PY
