@@ -55,4 +55,5 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraxVersion")
     implementation("androidx.camera:camera-video:$cameraxVersion")
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
+    implementation("org.opencv:opencv:4.12.0")
 }
