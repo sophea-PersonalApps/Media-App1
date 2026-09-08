@@ -38,6 +38,9 @@ object DocumentDetector {
     )
 
     private val openCvReady by lazy { OpenCVLoader.initLocal() }
+    private var stableCandidate: Quad? = null
+    private var stableFrames = 0
+    private var lastFrameTime = 0L
 
     fun detect(bitmap: Bitmap): Quad? {
         if (!openCvReady || bitmap.width < 160 || bitmap.height < 160) return null
@@ -60,7 +63,8 @@ object DocumentDetector {
         val gray = Mat(height, width, org.opencv.core.CvType.CV_8UC1)
         return try {
             copyPlane(plane.buffer, plane.rowStride, plane.pixelStride, width, height, gray)
-            detectGray(gray, width, height)
+            val candidate = detectGray(gray, width, height)
+            stabilize(candidate)
         } finally {
             gray.release()
         }
@@ -135,23 +139,41 @@ object DocumentDetector {
                     var bestScore = 0.0
                     for (contour in contours) {
                         val area = abs(Imgproc.contourArea(contour))
-                        if (area < imageArea * 0.12) continue
+                        val areaRatio = area / imageArea
+                        if (areaRatio < 0.12 || areaRatio > 0.92) continue
                         val contour2f = MatOfPoint2f(*contour.toArray())
                         val approximation = MatOfPoint2f()
                         val convex = MatOfPoint()
                         try {
                             val perimeter = Imgproc.arcLength(contour2f, true)
-                            Imgproc.approxPolyDP(contour2f, approximation, perimeter * 0.025, true)
+                            Imgproc.approxPolyDP(contour2f, approximation, perimeter * 0.018, true)
                             val points = approximation.toArray()
                             if (points.size != 4) continue
                             convex.fromArray(*points)
                             if (!Imgproc.isContourConvex(convex)) continue
                             val ordered = order(points)
+                            val sideLengths = arrayOf(
+                                distance(ordered[0], ordered[1]),
+                                distance(ordered[1], ordered[2]),
+                                distance(ordered[2], ordered[3]),
+                                distance(ordered[3], ordered[0])
+                            )
+                            val shortestSide = sideLengths.minOrNull() ?: continue
+                            val longestSide = sideLengths.maxOrNull() ?: continue
+                            if (shortestSide < min(work.cols(), work.rows()) * 0.12) continue
+                            if (longestSide / shortestSide > 4.5) continue
+
                             val rectangularity = angleScore(ordered)
-                            val areaScore = (area / imageArea).coerceIn(0.0, 1.0)
+                            if (rectangularity < 0.55) continue
+                            val sideConsistency = 1.0 - min(
+                                1.0,
+                                (abs(sideLengths[0] - sideLengths[2]) + abs(sideLengths[1] - sideLengths[3])) /
+                                    max(1.0, sideLengths.sum()) * 2.0
+                            )
+                            val areaScore = areaRatio.coerceIn(0.0, 1.0)
                             val marginScore = marginScore(ordered, work.cols(), work.rows())
-                            val score = areaScore * 0.62 + rectangularity * 0.28 + marginScore * 0.10
-                            if (score > bestScore && rectangularity > 0.35) {
+                            val score = areaScore * 0.50 + rectangularity * 0.25 + sideConsistency * 0.15 + marginScore * 0.10
+                            if (score > bestScore) {
                                 bestScore = score
                                 best = Quad(
                                     topLeft = PointF((ordered[0].x / scale).toFloat(), (ordered[0].y / scale).toFloat()),
@@ -181,6 +203,49 @@ object DocumentDetector {
             work.release()
         }
     }
+
+    private fun stabilize(candidate: Quad?): Quad? {
+        val now = System.currentTimeMillis()
+        if (now - lastFrameTime > 500L) {
+            stableCandidate = null
+            stableFrames = 0
+        }
+        lastFrameTime = now
+        if (candidate == null) {
+            stableFrames = 0
+            stableCandidate = null
+            return null
+        }
+        val previous = stableCandidate
+        if (previous != null && similar(previous, candidate)) {
+            stableFrames++
+            stableCandidate = blend(previous, candidate)
+        } else {
+            stableCandidate = candidate
+            stableFrames = 1
+        }
+        return if (stableFrames >= 2) stableCandidate else null
+    }
+
+    private fun similar(a: Quad, b: Quad): Boolean {
+        if (a.width != b.width || a.height != b.height) return false
+        val toleranceX = a.width * 0.08f
+        val toleranceY = a.height * 0.08f
+        return distance(a.topLeft, b.topLeft) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
+            distance(a.topRight, b.topRight) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
+            distance(a.bottomRight, b.bottomRight) < hypot(toleranceX.toDouble(), toleranceY.toDouble()) &&
+            distance(a.bottomLeft, b.bottomLeft) < hypot(toleranceX.toDouble(), toleranceY.toDouble())
+    }
+
+    private fun blend(a: Quad, b: Quad): Quad = Quad(
+        topLeft = PointF((a.topLeft.x + b.topLeft.x) / 2f, (a.topLeft.y + b.topLeft.y) / 2f),
+        topRight = PointF((a.topRight.x + b.topRight.x) / 2f, (a.topRight.y + b.topRight.y) / 2f),
+        bottomRight = PointF((a.bottomRight.x + b.bottomRight.x) / 2f, (a.bottomRight.y + b.bottomRight.y) / 2f),
+        bottomLeft = PointF((a.bottomLeft.x + b.bottomLeft.x) / 2f, (a.bottomLeft.y + b.bottomLeft.y) / 2f),
+        confidence = max(a.confidence, b.confidence),
+        width = b.width,
+        height = b.height
+    )
 
     private fun copyPlane(buffer: ByteBuffer, rowStride: Int, pixelStride: Int, width: Int, height: Int, destination: Mat) {
         val data = ByteArray(width * height)
@@ -229,4 +294,5 @@ object DocumentDetector {
     }
 
     private fun distance(a: Point, b: Point): Double = hypot(a.x - b.x, a.y - b.y)
+    private fun distance(a: PointF, b: PointF): Double = hypot((a.x - b.x).toDouble(), (a.y - b.y).toDouble())
 }
