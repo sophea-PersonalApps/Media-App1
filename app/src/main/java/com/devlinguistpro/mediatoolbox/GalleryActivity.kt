@@ -73,7 +73,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private enum class GalleryTab { PHOTOS, VIDEOS, ALBUMS }
-private data class MediaAccess(val images: Boolean, val videos: Boolean) { val any: Boolean get() = images || videos }
+private data class MediaAccess(val images: Boolean, val videos: Boolean, val partial: Boolean = false) { val any: Boolean get() = images || videos }
 private data class MediaItem(val uri: Uri, val name: String, val dateAdded: Long, val isVideo: Boolean, val bucketId: String?, val bucketName: String?)
 private data class Album(val id: String, val name: String, val count: Int, val coverUri: Uri, val coverIsVideo: Boolean)
 
@@ -97,11 +97,17 @@ class GalleryActivity : ComponentActivity() {
     }
     override fun onResume() { super.onResume(); val access = currentMediaAccess(); if (mediaAccess != access) mediaAccess = access }
     private fun currentMediaAccess(): MediaAccess {
-        if (Build.VERSION.SDK_INT <= 32) return MediaAccess(ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED, ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED)
-        val images = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
-        val videos = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-        if (Build.VERSION.SDK_INT >= 34 && ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED) return MediaAccess(true, true)
-        return MediaAccess(images, videos)
+        if (Build.VERSION.SDK_INT <= 32) {
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            return MediaAccess(granted, granted, false)
+        }
+        val imagesFull = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_IMAGES) == PackageManager.PERMISSION_GRANTED
+        val videosFull = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
+        if (Build.VERSION.SDK_INT >= 34) {
+            val selected = ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED) == PackageManager.PERMISSION_GRANTED
+            if (selected) return MediaAccess(imagesFull || selected, videosFull || selected, !imagesFull || !videosFull)
+        }
+        return MediaAccess(imagesFull, videosFull, false)
     }
     private fun requestMediaPermission() { when { Build.VERSION.SDK_INT >= 34 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED)); Build.VERSION.SDK_INT >= 33 -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)); else -> permissionLauncher.launch(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)) } }
     private fun deleteMedia(uri: Uri, onResult: (Boolean) -> Unit) {
@@ -162,8 +168,12 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
     if (showDeleteConfirmation) AlertDialog(onDismissRequest = { showDeleteConfirmation = false }, title = { Text("Delete selected media?") }, text = { Text("Delete ${selectedItems.size} selected item${if (selectedItems.size == 1) "" else "s"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { showDeleteConfirmation = false; val uris = selectedItems.values.map { it.uri }; onDeleteBatch(uris) { deleted -> if (deleted) { selectionMode = false; selectedItems.clear(); refreshToken++ } } }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") } })
     Column(Modifier.fillMaxSize().background(Color.Black)) {
         if (selectionMode) GallerySelectionBar(selectedItems.size, media.size, { selectionMode = false; selectedItems.clear() }, { media.forEach { selectedItems[it.uri.toString()] = it } }, { selectedItems.clear() }, { shareMedia(context, selectedItems.values.map { it.uri }) }, { showDeleteConfirmation = true })
-        else if (selectedAlbumId == null) GalleryTabs(tab, access) { tab = it; selectedAlbumId = null; selectedAlbumName = null }
-        if (selectedAlbumId != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }; Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); IconButton(onClick = { refreshToken++ }) { Icon(Icons.Default.Refresh, "Refresh album", tint = Color.White) } }
+        else if (selectedAlbumId == null) {
+            if (access.partial) PartialMediaAccessBanner(requestPermission)
+            GalleryTabs(tab, access) { tab = it; selectedAlbumId = null; selectedAlbumName = null }
+        }
+        if (selectedAlbumId != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }; Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); IconButton(onClick = { refreshToken++ }) { Icon(Icons.Default.Refresh, "Refresh album", tint = Color.White) }
+        }
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }
         else {
             val unavailable = (tab == GalleryTab.PHOTOS && !access.images) || (tab == GalleryTab.VIDEOS && !access.videos)
@@ -171,6 +181,14 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
             else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
         }
         GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS }, gallerySelected = true)
+    }
+}
+
+@Composable
+private fun PartialMediaAccessBanner(requestPermission: () -> Unit) {
+    Row(Modifier.fillMaxWidth().background(Color(0xFF202020)).padding(horizontal = 12.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text("Showing only media you selected", color = Color.LightGray, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        TextButton(onClick = requestPermission) { Text("Change access") }
     }
 }
 
