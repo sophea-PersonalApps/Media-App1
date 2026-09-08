@@ -6,7 +6,7 @@ on:
     branches: [ main ]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -87,9 +87,18 @@ jobs:
       - name: Verify APK exists
         run: test -s app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: media-toolbox-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+      - name: Save APK outside Actions artifact storage
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view media-toolbox-debug >/dev/null 2>&1; then
+            gh release create media-toolbox-debug \
+              --title "Media Toolbox Debug APK" \
+              --notes "Latest debug APK built from main." \
+              --prerelease
+          fi
+          gh release upload media-toolbox-debug \
+            app/build/outputs/apk/debug/app-debug.apk \
+            --clobber
