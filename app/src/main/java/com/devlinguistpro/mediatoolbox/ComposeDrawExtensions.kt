@@ -33,11 +33,21 @@ fun DrawScope.drawRoundRect(
             )
         )
     }
+    val resolvedStyle = if (pathEffect == null) {
+        style
+    } else {
+        Stroke(
+            width = style.width,
+            miter = style.miter,
+            cap = style.cap,
+            join = style.join,
+            pathEffect = pathEffect
+        )
+    }
     drawPath(
         path = path,
         color = color,
         alpha = alpha,
-        style = style,
-        pathEffect = pathEffect
+        style = resolvedStyle
     )
 }
