@@ -96,12 +96,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view media-toolbox-debug >/dev/null 2>&1; then
-            gh release create media-toolbox-debug \
+          RELEASE_TAG="media-toolbox-debug"
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK_NAME="MediaToolbox-debug.apk"
+
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
               --title "Media Toolbox Debug APK" \
               --notes "Latest debug APK built from main." \
               --prerelease
           fi
-          gh release upload media-toolbox-debug \
-            app/build/outputs/apk/debug/app-debug.apk \
-            --clobber
+
+          cp "$APK" "$APK_NAME"
+          gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
+
+          echo "Published APK: https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
