@@ -85,9 +85,22 @@ jobs:
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Verify APK exists
-        run: test -s app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          file app/build/outputs/apk/debug/app-debug.apk
+          sha256sum app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload APK for testing
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: media-toolbox-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 3
 
       - name: Publish APK to GitHub Release
+        if: ${{ hashFiles('app/build/outputs/apk/debug/app-debug.apk') != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
