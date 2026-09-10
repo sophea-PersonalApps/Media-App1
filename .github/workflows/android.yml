@@ -84,11 +84,15 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify APK exists
+      - name: Verify APK exists and is a real APK
+        shell: bash
         run: |
-          test -s app/build/outputs/apk/debug/app-debug.apk
-          file app/build/outputs/apk/debug/app-debug.apk
-          sha256sum app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          test "$(file -b --mime-type "$APK")" = "application/vnd.android.package-archive"
+          echo "APK size: $(du -h "$APK" | cut -f1)"
+          sha256sum "$APK"
 
       - name: Publish APK to GitHub Release
         env:
@@ -102,12 +106,17 @@ jobs:
 
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release create "$RELEASE_TAG" \
+              --target "$GITHUB_SHA" \
               --title "Media Toolbox Debug APK" \
               --notes "Latest debug APK built from main." \
               --prerelease
           fi
 
-          cp "$APK" "$APK_NAME"
-          gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
+          gh release upload "$RELEASE_TAG" "$APK#$APK_NAME" --clobber
 
-          echo "Published APK: https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
+          echo ""
+          echo "============================================================"
+          echo "DIRECT APK DOWNLOAD"
+          echo "https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
+          echo "============================================================"
+          echo "Do not use the Actions artifact download for the APK."
