@@ -95,6 +95,20 @@ jobs:
           if "private fun updateCameraZoom(value: Float)" not in text:
               raise SystemExit("Camera zoom function fix was not applied")
           camera.write_text(text, encoding="utf-8")
+
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
+          gallery_text = gallery.read_text(encoding="utf-8")
+          if "import androidx.compose.ui.input.pointer.pointerInput" not in gallery_text:
+              gallery_text = gallery_text.replace(
+                  "import androidx.compose.ui.graphics.graphicsLayer\n",
+                  "import androidx.compose.ui.graphics.graphicsLayer\nimport androidx.compose.ui.input.pointer.pointerInput\n"
+              )
+          if "import androidx.compose.foundation.layout.weight" not in gallery_text:
+              gallery_text = gallery_text.replace(
+                  "import androidx.compose.foundation.layout.*\n",
+                  "import androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.layout.weight\n"
+              )
+          gallery.write_text(gallery_text, encoding="utf-8")
           PY
 
       - name: Build debug APK
