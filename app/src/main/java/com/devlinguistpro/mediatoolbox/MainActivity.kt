@@ -13,6 +13,7 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
@@ -70,6 +71,7 @@ private enum class FlashSetting(val label: String) { OFF("Off"), AUTO("Auto"), O
 class MainActivity : ComponentActivity() {
     private val cameraExecutor: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
     private var cameraProvider: ProcessCameraProvider? = null
+    private var camera: Camera? = null
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var activeRecording by mutableStateOf<Recording?>(null)
@@ -79,6 +81,7 @@ class MainActivity : ComponentActivity() {
     private var cameraPermissionGranted by mutableStateOf(false)
     private var flashSetting by mutableStateOf(FlashSetting.OFF)
     private var flashAvailable by mutableStateOf(false)
+    private var cameraZoom by mutableFloatStateOf(1f)
     private var pendingVideoRecording = false
     private var cameraBindRequestId = 0L
     private var cameraBindingInProgress = false
@@ -92,9 +95,7 @@ class MainActivity : ComponentActivity() {
 
     private val audioPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!pendingVideoRecording || isFinishing || isDestroyed) return@registerForActivityResult
-        if (granted && currentMode == CameraSectionMode.VIDEO) {
-            startVideoRecording()
-        } else {
+        if (granted && currentMode == CameraSectionMode.VIDEO) startVideoRecording() else {
             pendingVideoRecording = false
             if (!granted) Toast.makeText(this, "Microphone access is needed to record video with sound", Toast.LENGTH_LONG).show()
         }
@@ -113,6 +114,7 @@ class MainActivity : ComponentActivity() {
                     currentLens = currentLens,
                     flashSetting = flashSetting,
                     flashAvailable = flashAvailable,
+                    cameraZoom = cameraZoom,
                     onRequestPermission = { cameraPermission.launch(Manifest.permission.CAMERA) },
                     onPreviewReady = { view -> previewView = view; if (cameraPermissionGranted) bindCamera() },
                     onCapture = ::capturePhoto,
@@ -122,6 +124,7 @@ class MainActivity : ComponentActivity() {
                     onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
                     onOpenSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onCycleFlash = ::cycleFlash,
+                    onZoom = ::setCameraZoom,
                     onModeChanged = ::changeMode
                 )
             }
@@ -168,6 +171,7 @@ class MainActivity : ComponentActivity() {
         when (mode) {
             CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> {
                 currentMode = mode
+                cameraZoom = 1f
                 bindCamera(forceRebind = true)
             }
             CameraSectionMode.SCAN -> startActivity(Intent(this, ScannerActivity::class.java))
@@ -179,6 +183,7 @@ class MainActivity : ComponentActivity() {
         when (mode) {
             CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> {
                 currentMode = mode
+                cameraZoom = 1f
                 bindCamera(forceRebind = true)
             }
             else -> Unit
@@ -189,8 +194,7 @@ class MainActivity : ComponentActivity() {
         val view = previewView ?: return
         if (!hasCameraPermission() || isFinishing || isDestroyed || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
         if (!forceRebind && cameraBindingInProgress) return
-        if (!forceRebind && cameraProvider != null && boundMode == currentMode && boundLens == currentLens &&
-            ((currentMode == CameraSectionMode.PHOTO && imageCapture != null) || (currentMode == CameraSectionMode.VIDEO && videoCapture != null))) return
+        if (!forceRebind && cameraProvider != null && boundMode == currentMode && boundLens == currentLens && ((currentMode == CameraSectionMode.PHOTO && imageCapture != null) || (currentMode == CameraSectionMode.VIDEO && videoCapture != null))) return
 
         val requestId = ++cameraBindRequestId
         cameraBindingInProgress = true
@@ -209,21 +213,21 @@ class MainActivity : ComponentActivity() {
                 imageCapture = null
                 videoCapture = null
                 flashAvailable = false
+                camera = null
 
                 when (currentMode) {
                     CameraSectionMode.PHOTO -> {
                         val capture = ImageCapture.Builder()
                             .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                            .setFlashMode(
-                                when (flashSetting) {
-                                    FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
-                                    FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
-                                    FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
-                                }
-                            ).build()
+                            .setFlashMode(when (flashSetting) {
+                                FlashSetting.OFF -> ImageCapture.FLASH_MODE_OFF
+                                FlashSetting.AUTO -> ImageCapture.FLASH_MODE_AUTO
+                                FlashSetting.ON -> ImageCapture.FLASH_MODE_ON
+                            }).build()
                         imageCapture = capture
-                        val camera = provider.bindToLifecycle(this, selector, preview, capture)
-                        flashAvailable = camera.cameraInfo.hasFlashUnit()
+                        val boundCamera = provider.bindToLifecycle(this, selector, preview, capture)
+                        camera = boundCamera
+                        flashAvailable = boundCamera.cameraInfo.hasFlashUnit()
                         if (!flashAvailable && flashSetting != FlashSetting.OFF) {
                             flashSetting = FlashSetting.OFF
                             provider.unbindAll()
@@ -232,27 +236,25 @@ class MainActivity : ComponentActivity() {
                                 .setFlashMode(ImageCapture.FLASH_MODE_OFF)
                                 .build()
                             imageCapture = safeCapture
-                            provider.bindToLifecycle(this, selector, preview, safeCapture)
+                            camera = provider.bindToLifecycle(this, selector, preview, safeCapture)
                         }
                     }
                     CameraSectionMode.VIDEO -> {
                         val recorder = Recorder.Builder()
-                            .setQualitySelector(
-                                QualitySelector.from(
-                                    Quality.HIGHEST,
-                                    androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD)
-                                )
-                            ).build()
+                            .setQualitySelector(QualitySelector.from(Quality.HIGHEST, androidx.camera.video.FallbackStrategy.higherQualityOrLowerThan(Quality.FHD)))
+                            .build()
                         val video = VideoCapture.withOutput(recorder)
                         videoCapture = video
-                        provider.bindToLifecycle(this, selector, preview, video)
+                        camera = provider.bindToLifecycle(this, selector, preview, video)
                         if (pendingVideoRecording && hasAudioPermission()) startVideoRecording()
                     }
                     CameraSectionMode.SCAN, CameraSectionMode.QR -> Unit
                 }
+                camera?.cameraControl?.setZoomRatio(cameraZoom)
                 boundMode = currentMode
                 boundLens = currentLens
             } catch (_: Exception) {
+                camera = null
                 imageCapture = null
                 videoCapture = null
                 flashAvailable = false
@@ -264,6 +266,13 @@ class MainActivity : ComponentActivity() {
                 if (requestId == cameraBindRequestId) cameraBindingInProgress = false
             }
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun setCameraZoom(value: Float) {
+        if (currentMode != CameraSectionMode.PHOTO && currentMode != CameraSectionMode.VIDEO) return
+        val maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 10f
+        cameraZoom = value.coerceIn(1f, maxZoom)
+        camera?.cameraControl?.setZoomRatio(cameraZoom)
     }
 
     private fun cycleFlash() {
@@ -280,6 +289,7 @@ class MainActivity : ComponentActivity() {
         if (activeRecording != null || isFinishing || isDestroyed) return
         currentLens = if (currentLens == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         if (currentLens == CameraSelector.LENS_FACING_FRONT) flashSetting = FlashSetting.OFF
+        cameraZoom = 1f
         bindCamera(forceRebind = true)
     }
 
@@ -306,87 +316,46 @@ class MainActivity : ComponentActivity() {
                     return
                 }
                 try {
-                    if (Build.VERSION.SDK_INT >= 29) {
-                        contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
-                    }
+                    if (Build.VERSION.SDK_INT >= 29) contentResolver.update(uri, ContentValues().apply { put(MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
                 } catch (_: Exception) {
                     contentResolver.delete(uri, null, null)
                     runOnUiThread { Toast.makeText(this@MainActivity, "Could not finish saving photo", Toast.LENGTH_LONG).show() }
                 }
             }
-            override fun onError(exception: ImageCaptureException) {
-                runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_SHORT).show() }
-            }
+            override fun onError(exception: ImageCaptureException) { runOnUiThread { Toast.makeText(this@MainActivity, "Could not take photo", Toast.LENGTH_SHORT).show() } }
         })
     }
 
     private fun toggleVideoRecording() {
         if (currentMode != CameraSectionMode.VIDEO || isFinishing || isDestroyed) return
-        activeRecording?.let {
-            pendingVideoRecording = false
-            it.stop()
-            return
-        }
+        activeRecording?.let { pendingVideoRecording = false; it.stop(); return }
         pendingVideoRecording = true
-        if (!hasAudioPermission()) {
-            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
-            return
-        }
+        if (!hasAudioPermission()) { audioPermission.launch(Manifest.permission.RECORD_AUDIO); return }
         startVideoRecording()
     }
 
     private fun startVideoRecording() {
-        if (currentMode != CameraSectionMode.VIDEO || activeRecording != null || isFinishing || isDestroyed ||
-            !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
-        if (!hasAudioPermission()) {
-            pendingVideoRecording = true
-            audioPermission.launch(Manifest.permission.RECORD_AUDIO)
-            return
-        }
+        if (currentMode != CameraSectionMode.VIDEO || activeRecording != null || isFinishing || isDestroyed || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return
+        if (!hasAudioPermission()) { pendingVideoRecording = true; audioPermission.launch(Manifest.permission.RECORD_AUDIO); return }
         val capture = videoCapture
-        if (capture == null || boundMode != CameraSectionMode.VIDEO || boundLens != currentLens) {
-            pendingVideoRecording = true
-            bindCamera(forceRebind = true)
-            return
-        }
-
+        if (capture == null || boundMode != CameraSectionMode.VIDEO || boundLens != currentLens) { pendingVideoRecording = true; bindCamera(forceRebind = true); return }
         pendingVideoRecording = false
         val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
-        if (Build.VERSION.SDK_INT < 29) {
-            Toast.makeText(this, "Video recording requires Android 10 or newer", Toast.LENGTH_LONG).show()
-            return
-        }
-
+        if (Build.VERSION.SDK_INT < 29) { Toast.makeText(this, "Video recording requires Android 10 or newer", Toast.LENGTH_LONG).show(); return }
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, "VID_$timestamp.mp4")
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
             put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_DCIM + "/Media Toolbox")
             put(MediaStore.Video.Media.IS_PENDING, 1)
         }
-        val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI)
-            .setContentValues(values)
-            .build()
-
+        val output = MediaStoreOutputOptions.Builder(contentResolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
         try {
             val pending = capture.output.prepareRecording(this, output).withAudioEnabled()
             activeRecording = pending.start(ContextCompat.getMainExecutor(this)) { event ->
                 if (event is VideoRecordEvent.Finalize) {
                     activeRecording = null
                     val uri = event.outputResults.outputUri
-                    if (event.hasError()) {
-                        contentResolver.delete(uri, null, null)
-                    } else {
-                        try {
-                            contentResolver.update(
-                                uri,
-                                ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) },
-                                null,
-                                null
-                            )
-                        } catch (_: Exception) {
-                            contentResolver.delete(uri, null, null)
-                        }
-                    }
+                    if (event.hasError()) contentResolver.delete(uri, null, null) else runCatching { contentResolver.update(uri, ContentValues().apply { put(MediaStore.Video.Media.IS_PENDING, 0) }, null, null) }.onFailure { contentResolver.delete(uri, null, null) }
                 }
             }
         } catch (_: Exception) {
@@ -396,11 +365,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onStop() {
-        pendingVideoRecording = false
-        activeRecording?.stop()
-        super.onStop()
-    }
+    override fun onStop() { pendingVideoRecording = false; activeRecording?.stop(); super.onStop() }
 
     override fun onDestroy() {
         pendingVideoRecording = false
@@ -408,6 +373,7 @@ class MainActivity : ComponentActivity() {
         cameraBindRequestId++
         cameraProvider?.unbindAll()
         cameraProvider = null
+        camera = null
         imageCapture = null
         videoCapture = null
         boundMode = null
@@ -420,10 +386,10 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MediaToolboxApp(
-    mode: CameraSectionMode, hasCameraPermission: Boolean, currentLens: Int, flashSetting: FlashSetting, flashAvailable: Boolean,
+    mode: CameraSectionMode, hasCameraPermission: Boolean, currentLens: Int, flashSetting: FlashSetting, flashAvailable: Boolean, cameraZoom: Float,
     onRequestPermission: () -> Unit, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onVideoToggle: () -> Unit,
     isRecording: Boolean, onFlip: () -> Unit, onOpenGallery: () -> Unit, onOpenSettings: () -> Unit, onCycleFlash: () -> Unit,
-    onModeChanged: (CameraSectionMode) -> Unit
+    onZoom: (Float) -> Unit, onModeChanged: (CameraSectionMode) -> Unit
 ) {
     var moreOpen by rememberSaveable { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
@@ -434,50 +400,43 @@ private fun MediaToolboxApp(
                     Spacer(Modifier.height(16.dp)); Button(onClick = onRequestPermission) { Text("Allow camera") }
                 }
             }
-        } else CameraScreen(mode, currentLens, onPreviewReady, onCapture, onVideoToggle, isRecording, onFlip, onOpenGallery, flashSetting, flashAvailable, onCycleFlash, onModeChanged, moreOpen) { moreOpen = it }
+        } else CameraScreen(mode, currentLens, cameraZoom, onPreviewReady, onCapture, onVideoToggle, isRecording, onFlip, onOpenGallery, flashSetting, flashAvailable, onCycleFlash, onZoom, onModeChanged, moreOpen) { moreOpen = it }
     }
     if (moreOpen) AlertDialog(
         onDismissRequest = { moreOpen = false }, title = { Text("More camera options") },
-        text = {
-            Column {
-                if (mode == CameraSectionMode.PHOTO && flashAvailable) {
-                    Text("Flash: ${flashSetting.label}"); Spacer(Modifier.height(8.dp))
-                    Button(onClick = { onCycleFlash(); moreOpen = false }) {
-                        val icon = when (flashSetting) { FlashSetting.OFF -> Icons.Default.FlashOff; FlashSetting.AUTO -> Icons.Default.FlashAuto; FlashSetting.ON -> Icons.Default.FlashOn }
-                        Icon(icon, "Flash"); Spacer(Modifier.size(6.dp)); Text("Change flash")
-                    }
-                    Spacer(Modifier.height(8.dp))
+        text = { Column {
+            if (mode == CameraSectionMode.PHOTO && flashAvailable) {
+                Text("Flash: ${flashSetting.label}"); Spacer(Modifier.height(8.dp))
+                Button(onClick = { onCycleFlash(); moreOpen = false }) {
+                    val icon = when (flashSetting) { FlashSetting.OFF -> Icons.Default.FlashOff; FlashSetting.AUTO -> Icons.Default.FlashAuto; FlashSetting.ON -> Icons.Default.FlashOn }
+                    Icon(icon, "Flash"); Spacer(Modifier.size(6.dp)); Text("Change flash")
                 }
-                Button(onClick = { moreOpen = false; onOpenSettings() }) { Text("Settings") }
+                Spacer(Modifier.height(8.dp))
             }
-        }, confirmButton = { Button(onClick = { moreOpen = false }) { Text("Done") } }
+            Button(onClick = { moreOpen = false; onOpenSettings() }) { Text("Settings") }
+        } }, confirmButton = { Button(onClick = { moreOpen = false }) { Text("Done") } }
     )
 }
 
 @Composable
 private fun CameraScreen(
-    mode: CameraSectionMode, currentLens: Int, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onVideoToggle: () -> Unit,
+    mode: CameraSectionMode, currentLens: Int, cameraZoom: Float, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onVideoToggle: () -> Unit,
     isRecording: Boolean, onFlip: () -> Unit, onOpenGallery: () -> Unit, flashSetting: FlashSetting, flashAvailable: Boolean,
-    onCycleFlash: () -> Unit, onModeChanged: (CameraSectionMode) -> Unit, moreOpen: Boolean, setMoreOpen: (Boolean) -> Unit
+    onCycleFlash: () -> Unit, onZoom: (Float) -> Unit, onModeChanged: (CameraSectionMode) -> Unit, moreOpen: Boolean, setMoreOpen: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val modes = CameraSectionMode.entries
     val selectedIndex = modes.indexOf(mode)
     var showCaptureFlash by remember { mutableStateOf(false) }
     LaunchedEffect(showCaptureFlash) { if (showCaptureFlash) { kotlinx.coroutines.delay(120); showCaptureFlash = false } }
-    var cameraZoom by remember { mutableFloatStateOf(1f) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
-            factory = {
-                PreviewView(context).apply {
-                    scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
-                    implementationMode = PreviewView.ImplementationMode.PERFORMANCE
-                    onPreviewReady(this)
-                }
-            },
-            update = { view ->
-                view.scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
-            },
+            factory = { PreviewView(context).apply {
+                scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER
+                implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                onPreviewReady(this)
+            } },
+            update = { view -> view.scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT) PreviewView.ScaleType.FIT_CENTER else PreviewView.ScaleType.FILL_CENTER },
             modifier = Modifier.fillMaxSize()
         )
         if (showCaptureFlash && mode == CameraSectionMode.PHOTO) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.88f)))
@@ -488,40 +447,23 @@ private fun CameraScreen(
                 drag = 0f
             })
         })
-        Box(
-            Modifier.fillMaxSize().pointerInput(mode, currentLens) {
-                detectTransformGestures { _, _, zoom, _ ->
-                    cameraZoom = (cameraZoom * zoom).coerceIn(1f, 10f)
-                    onPreviewReady // keep the existing camera callback reference stable
-                }
-            }
-        )
-        LaunchedEffect(cameraZoom, mode, currentLens) {
-            val view = previewViewFromContext(context)
-            if (view != null && (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO)) {
-                view.tag = cameraZoom
-            }
+        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
+                detectTransformGestures { _, _, zoom, _ -> onZoom(cameraZoom * zoom) }
+            })
         }
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
             CameraSectionControls(
-                mode = mode,
-                onModeSelected = onModeChanged,
-                onPrimaryAction = {
-                    when (mode) {
-                        CameraSectionMode.PHOTO -> { onCapture(); showCaptureFlash = true }
-                        CameraSectionMode.VIDEO -> onVideoToggle()
-                        CameraSectionMode.SCAN, CameraSectionMode.QR -> Unit
-                    }
-                },
-                onFlip = onFlip,
-                onMore = { setMoreOpen(true) },
-                primaryEnabled = mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO,
-                isRecording = isRecording
+                mode = mode, onModeSelected = onModeChanged,
+                onPrimaryAction = { when (mode) {
+                    CameraSectionMode.PHOTO -> { onCapture(); showCaptureFlash = true }
+                    CameraSectionMode.VIDEO -> onVideoToggle()
+                    CameraSectionMode.SCAN, CameraSectionMode.QR -> Unit
+                } },
+                onFlip = onFlip, onMore = { setMoreOpen(true) }, primaryEnabled = mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO, isRecording = isRecording
             )
             CameraSectionBottomNavigation(cameraSelected = true, onCamera = { if (mode != CameraSectionMode.PHOTO) onModeChanged(CameraSectionMode.PHOTO) }, onGallery = onOpenGallery)
         }
     }
 }
-
-private fun previewViewFromContext(context: android.content.Context): PreviewView? = null
