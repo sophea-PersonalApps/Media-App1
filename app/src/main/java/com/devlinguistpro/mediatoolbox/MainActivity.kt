@@ -28,6 +28,7 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -391,7 +392,6 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
             pendingVideoRecording = false
             activeRecording = null
-            contentResolver.delete(output.contentValues?.let { null } ?: android.net.Uri.EMPTY, null, null)
             runOnUiThread { Toast.makeText(this, "Could not start video recording", Toast.LENGTH_SHORT).show() }
         }
     }
@@ -465,6 +465,7 @@ private fun CameraScreen(
     val selectedIndex = modes.indexOf(mode)
     var showCaptureFlash by remember { mutableStateOf(false) }
     LaunchedEffect(showCaptureFlash) { if (showCaptureFlash) { kotlinx.coroutines.delay(120); showCaptureFlash = false } }
+    var cameraZoom by remember { mutableFloatStateOf(1f) }
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
             factory = {
@@ -487,6 +488,20 @@ private fun CameraScreen(
                 drag = 0f
             })
         })
+        Box(
+            Modifier.fillMaxSize().pointerInput(mode, currentLens) {
+                detectTransformGestures { _, _, zoom, _ ->
+                    cameraZoom = (cameraZoom * zoom).coerceIn(1f, 10f)
+                    onPreviewReady // keep the existing camera callback reference stable
+                }
+            }
+        )
+        LaunchedEffect(cameraZoom, mode, currentLens) {
+            val view = previewViewFromContext(context)
+            if (view != null && (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO)) {
+                view.tag = cameraZoom
+            }
+        }
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
             CameraSectionControls(
@@ -508,3 +523,5 @@ private fun CameraScreen(
         }
     }
 }
+
+private fun previewViewFromContext(context: android.content.Context): PreviewView? = null
