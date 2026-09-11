@@ -89,7 +89,6 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
           text = main.read_text(encoding="utf-8")
@@ -133,58 +132,30 @@ jobs:
               text = text.replace(old_gesture, new_gesture)
           elif "detectTransformGestures { _, pan, zoom, _ ->" not in text:
               raise SystemExit("Camera gesture block was not found")
-
-          text = text.replace("import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n", "import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n")
           main.write_text(text, encoding="utf-8")
 
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
           g = gallery.read_text(encoding="utf-8")
+          import_anchor = "import androidx.compose.ui.graphics.graphicsLayer\n"
+          if "import androidx.compose.ui.input.pointer.pointerInput\n" not in g:
+              if import_anchor not in g:
+                  raise SystemExit("Gallery import anchor was not found")
+              g = g.replace(import_anchor, import_anchor + "import androidx.compose.ui.input.pointer.pointerInput\n", 1)
+          g = g.replace("@Composable private fun MediaGrid(items: List<MediaItem>", "@Composable private fun ColumnScope.MediaGrid(items: List<MediaItem>", 1)
+          gallery.write_text(g, encoding="utf-8")
 
-          old_photo = '''                        Box(Modifier.fillMaxSize().pointerInput(uri) {
-                            detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
-                        }, contentAlignment = Alignment.Center) {
-                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom), contentScale = ContentScale.Fit)
-                        }
-'''
-          new_photo = '''                        var photoOffsetX by remember(uri) { mutableFloatStateOf(0f) }
-                        var photoOffsetY by remember(uri) { mutableFloatStateOf(0f) }
-                        Box(Modifier.fillMaxSize().pointerInput(uri) {
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                val nextZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                photoZoom = nextZoom
-                                if (nextZoom <= 1.001f) {
-                                    photoOffsetX = 0f
-                                    photoOffsetY = 0f
-                                } else {
-                                    val maxX = size.width * (nextZoom - 1f) / 2f
-                                    val maxY = size.height * (nextZoom - 1f) / 2f
-                                    photoOffsetX = (photoOffsetX + pan.x).coerceIn(-maxX, maxX)
-                                    photoOffsetY = (photoOffsetY + pan.y).coerceIn(-maxY, maxY)
-                                }
-                            }
-                        }, contentAlignment = Alignment.Center) {
-                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom, translationX = photoOffsetX, translationY = photoOffsetY), contentScale = ContentScale.Fit)
-                        }
-'''
-          if old_photo in g:
-              g = g.replace(old_photo, new_photo)
-          else:
-              raise SystemExit("Gallery photo gesture block was not found")
-
-          old_touch = '''        videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }
-'''
-          new_touch = '''        videoView.setOnTouchListener { _, event ->
+          video = gallery.read_text(encoding="utf-8")
+          old_video_touch = "        videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }"
+          new_video_touch = '''        videoView.setOnTouchListener { _, event ->
             val wasScaling = scaleDetector.isInProgress
             scaleDetector.onTouchEvent(event)
             event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress
-        }
-'''
-          if old_touch in g:
-              g = g.replace(old_touch, new_touch)
+        }'''
+          if old_video_touch in video:
+              video = video.replace(old_video_touch, new_video_touch, 1)
           else:
-              raise SystemExit("Video touch listener was not found")
-
-          gallery.write_text(g, encoding="utf-8")
+              raise SystemExit("Gallery video touch listener was not found")
+          gallery.write_text(video, encoding="utf-8")
           PY
 
       - name: Verify zoom source fixes were applied
@@ -195,7 +166,7 @@ jobs:
           main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
           required_main = ["detectTransformGestures { _, pan, zoom, _ ->", "onZoom = ::updateCameraZoom"]
-          required_gallery = ["photoOffsetX", "photoOffsetY", "scaleDetector.isInProgress"]
+          required_gallery = ["import androidx.compose.ui.input.pointer.pointerInput", "ColumnScope.MediaGrid", "scaleDetector.isInProgress"]
           for item in required_main:
               if item not in main: raise SystemExit("Missing camera fix: " + item)
           for item in required_gallery:
