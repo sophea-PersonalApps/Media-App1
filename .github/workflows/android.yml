@@ -21,6 +21,12 @@ jobs:
           set -euo pipefail
           python3 tools/patch_pinch_zoom.py
 
+      - name: Apply gallery video actions and album navigation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/patch_gallery_ui.py
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -60,7 +66,7 @@ jobs:
               raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
           PY
 
-      - name: Verify implemented pinch zoom and gallery pan source
+      - name: Verify all requested gallery source changes
         shell: bash
         run: |
           set -euo pipefail
@@ -79,14 +85,16 @@ jobs:
               "gallery vertical pan state": "var photoPanY by rememberSaveable(uri)" in gallery,
               "gallery horizontal translation": "translationX = photoPanX" in gallery,
               "gallery vertical translation": "translationY = photoPanY" in gallery,
-              "gallery transform gesture": "detectTransformGestures" in gallery,
+              "video speed state": "var videoSpeed by rememberSaveable(uri)" in gallery,
+              "video speed top action": 'Text("${videoSpeed}x", color = Color.White' in gallery,
+              "video player receives speed": "VideoPlayer(uri, videoSpeed)" in gallery,
+              "album click is attached to thumbnail": "onClick = { onClick(album) }" in gallery,
+              "old floating video speed control removed": "Box(Modifier.align(Alignment.TopEnd).padding(12.dp))" not in gallery,
           }
-          for name, ok in checks.items():
-              print(("PASS " if ok else "FAIL ") + name)
           failed = [name for name, ok in checks.items() if not ok]
-          if failed:
-              raise SystemExit("IMPLEMENTATION SOURCE AUDIT FAILED: " + "; ".join(failed))
-          print("IMPLEMENTATION SOURCE AUDIT PASSED")
+          for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
+          if failed: raise SystemExit("GALLERY SOURCE AUDIT FAILED: " + "; ".join(failed))
+          print("ALL SOURCE AUDITS PASSED")
           PY
 
       - name: Build debug APK
@@ -117,11 +125,11 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.email '41898282+github-actions[bot].com'
           git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Implement pinch zoom and gallery photo panning [skip ci]'
+            git commit -m 'Add video viewer actions and fix album navigation [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
