@@ -137,7 +137,7 @@ jobs:
       - name: Upload APK as Actions artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MediaToolbox-debug-apk-${{ github.ref_name }}
+          name: MediaToolbox-debug-apk-${{ github.run_id }}
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           compression-level: 0
