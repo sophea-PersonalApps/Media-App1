@@ -70,19 +70,22 @@ jobs:
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
           checks = {
               "camera transform gesture": "detectTransformGestures(panZoomLock = true)" in main,
-              "camera accumulated zoom": "var gestureZoom = cameraZoom" in main and "gestureZoom = (gestureZoom * zoom)" in main,
+              "camera accumulated zoom state": "var gestureZoom = cameraZoom" in main,
+              "camera accumulated zoom update": "gestureZoom = (gestureZoom * zoom)" in main,
+              "camera pointer input is not restarted by zoom state": "pointerInput(mode, currentLens)" in main,
               "old camera horizontal handler removed": "detectHorizontalDragGestures" not in main,
-              "old camera zoom handler removed": "onZoom(cameraZoom * zoom)" not in main,
+              "old camera zoom multiplication removed": "onZoom(cameraZoom * zoom)" not in main,
               "gallery horizontal pan state": "var photoPanX by rememberSaveable(uri)" in gallery,
               "gallery vertical pan state": "var photoPanY by rememberSaveable(uri)" in gallery,
               "gallery horizontal translation": "translationX = photoPanX" in gallery,
               "gallery vertical translation": "translationY = photoPanY" in gallery,
+              "gallery transform gesture": "detectTransformGestures" in gallery,
           }
           for name, ok in checks.items():
               print(("PASS " if ok else "FAIL ") + name)
           failed = [name for name, ok in checks.items() if not ok]
           if failed:
-              raise SystemExit("Implementation source audit failed: " + ", ".join(failed))
+              raise SystemExit("IMPLEMENTATION SOURCE AUDIT FAILED: " + "; ".join(failed))
           print("IMPLEMENTATION SOURCE AUDIT PASSED")
           PY
 
