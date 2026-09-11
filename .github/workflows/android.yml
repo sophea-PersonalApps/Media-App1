@@ -64,18 +64,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
-          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
-          grep -q 'detectTransformGestures(panZoomLock = true)' "$MAIN"
-          grep -q 'var gestureZoom = cameraZoom' "$MAIN"
-          grep -q 'gestureZoom = (gestureZoom * zoom)' "$MAIN"
-          ! grep -q 'detectHorizontalDragGestures' "$MAIN"
-          ! grep -q 'onZoom(cameraZoom * zoom)' "$MAIN"
-          grep -q 'var photoPanX by rememberSaveable(uri)' "$GALLERY"
-          grep -q 'var photoPanY by rememberSaveable(uri)' "$GALLERY"
-          grep -q 'translationX = photoPanX' "$GALLERY"
-          grep -q 'translationY = photoPanY' "$GALLERY"
-          echo 'IMPLEMENTATION SOURCE AUDIT PASSED'
+          python3 - <<'PY'
+          from pathlib import Path
+          main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
+          checks = {
+              "camera transform gesture": "detectTransformGestures(panZoomLock = true)" in main,
+              "camera accumulated zoom": "var gestureZoom = cameraZoom" in main and "gestureZoom = (gestureZoom * zoom)" in main,
+              "old camera horizontal handler removed": "detectHorizontalDragGestures" not in main,
+              "old camera zoom handler removed": "onZoom(cameraZoom * zoom)" not in main,
+              "gallery horizontal pan state": "var photoPanX by rememberSaveable(uri)" in gallery,
+              "gallery vertical pan state": "var photoPanY by rememberSaveable(uri)" in gallery,
+              "gallery horizontal translation": "translationX = photoPanX" in gallery,
+              "gallery vertical translation": "translationY = photoPanY" in gallery,
+          }
+          for name, ok in checks.items():
+              print(("PASS " if ok else "FAIL ") + name)
+          failed = [name for name, ok in checks.items() if not ok]
+          if failed:
+              raise SystemExit("Implementation source audit failed: " + ", ".join(failed))
+          print("IMPLEMENTATION SOURCE AUDIT PASSED")
+          PY
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
