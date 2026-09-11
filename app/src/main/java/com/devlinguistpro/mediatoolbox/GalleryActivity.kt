@@ -236,7 +236,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun ColumnScope.MediaGrid(items: List<MediaItem>, selectionMode: Boolean, selectedItems: Map<String, MediaItem>, onLongClick: (MediaItem) -> Unit, onClick: (MediaItem) -> Unit) { if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f), selectedItems.containsKey(item.uri.toString()), selectionMode, { onLongClick(item) }, { onClick(item) }) } } }
-@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth().clickable { onClick(album) }) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f)); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
+@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth()) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f), onClick = { onClick(album) }); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun MediaThumbnail(uri: Uri, description: String, isVideo: Boolean, modifier: Modifier, selected: Boolean = false, selectionMode: Boolean = false, onLongClick: () -> Unit = {}, onClick: () -> Unit = {}) { val context = LocalContext.current; var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.get(uri, isVideo)) }; LaunchedEffect(uri, isVideo) { if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) } }; Box(modifier.background(if (selected) Color.White.copy(alpha = 0.32f) else Color.DarkGray).combinedClickable(onClick = onClick, onLongClick = onLongClick), contentAlignment = Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }; if (bitmap == null && isVideo) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp); if (isVideo) Box(Modifier.align(Alignment.BottomStart).padding(6.dp).background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) { Text("VIDEO", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold) }; if (selected) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) { Text("✓", color = Color.Black, fontWeight = FontWeight.Bold) } else if (selectionMode) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape)) } }
@@ -244,17 +244,30 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 @Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
     var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
     var photoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var videoSpeed by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var speedMenuOpen by rememberSaveable(uri) { mutableStateOf(false) }
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
-                onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
+                if (isVideo) {
+                    Box {
+                        TextButton(onClick = { speedMenuOpen = true }) { Text("${videoSpeed}x", color = Color.White, fontWeight = FontWeight.Bold) }
+                        DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                            listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed ->
+                                DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { videoSpeed = selectedSpeed; speedMenuOpen = false })
+                            }
+                        }
+                    }
+                } else {
+                    onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
+                }
                 IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isVideo) VideoPlayer(uri) else {
+                if (isVideo) VideoPlayer(uri, videoSpeed) else {
                     val context = LocalContext.current
                     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
                     LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
@@ -307,12 +320,10 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     }
 }
 
-@Composable private fun VideoPlayer(uri: Uri) {
+@Composable private fun VideoPlayer(uri: Uri, speed: Float) {
     val context = LocalContext.current
     var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
     var retryKey by remember(uri) { mutableIntStateOf(0) }
-    var speed by remember(uri) { mutableFloatStateOf(1f) }
-    var speedMenuOpen by remember(uri) { mutableStateOf(false) }
     var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
     var videoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
     val videoView = remember(uri) { VideoView(context).apply {
@@ -349,6 +360,13 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
             runCatching { videoView.stopPlayback() }
         }
     }
+    LaunchedEffect(speed, activePlayer) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            activePlayer?.let { player ->
+                runCatching { player.playbackParams = player.playbackParams.apply { this.speed = speed } }
+            }
+        }
+    }
     LaunchedEffect(uri, retryKey) {
         state = VideoLoadState.LOADING
         activePlayer = null
@@ -373,10 +391,6 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
             VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White)
             VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { Text("Could not play this video", color = Color.White, fontSize = 16.sp); Spacer(Modifier.height(10.dp)); Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") } }
             VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit
-        }
-        if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
-            Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }
-            DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed -> DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { speed = selectedSpeed; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed } } }; speedMenuOpen = false }) } }
         }
     }
 }
