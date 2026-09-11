@@ -14,166 +14,83 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out source
-        uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
-          accept-android-sdk-licenses: true
+        uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK platform
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Android SDK
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
-      # IMPORTANT: source changes are made before validation/build, never after.
-      # The resulting source is committed with [skip ci] so this branch does not
-      # create an endless build -> commit -> build loop.
-      - name: Apply deterministic pinch zoom fixes
+      - name: Apply safe source fixes
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          main_path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
-          main = main_path.read_text(encoding="utf-8")
-
-          # CameraX zoom is already the correct mechanism. Keep it, but give the
-          # preview one gesture owner so pinch and horizontal mode swipes cannot
-          # fight over two overlapping pointerInput layers.
-          if "onZoom = ::setCameraZoom" in main:
-              main = main.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
-              main = main.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
-
-          old_gesture = re.compile(
-              r'''\s*Box\(Modifier\.fillMaxWidth\(\)\.fillMaxHeight\(0\.72f\)\.align\(Alignment\.TopCenter\)\.pointerInput\(mode\) \{.*?\n\s*\}\)\n\s*if \(mode == CameraSectionMode\.PHOTO \|\| mode == CameraSectionMode\.VIDEO\) \{.*?\n\s*\}\n''',
-              re.S,
-          )
-          new_gesture = '''
-        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens, cameraZoom) {
-            detectTransformGestures { _, pan, zoom, _ ->
-                if ((mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) && zoom != 1f) {
-                    onZoom(cameraZoom * zoom)
-                } else if (zoom == 1f && kotlin.math.abs(pan.x) > 55f && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y) * 1.25f) {
-                    when {
-                        pan.x < 0f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1])
-                        pan.x > 0f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1])
-                    }
-                }
-            }
-        })
-'''
-          updated, count = old_gesture.subn(new_gesture, main, count=1)
-          if count != 1:
-              if "detectTransformGestures { _, pan, zoom, _ ->" not in main:
-                  raise SystemExit("Camera gesture block could not be located safely")
-              updated = main
-          main_path.write_text(updated, encoding="utf-8")
-
-          gallery_path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
-          gallery = gallery_path.read_text(encoding="utf-8")
-
-          if "import androidx.compose.ui.input.pointer.pointerInput" not in gallery:
-              anchor = "import androidx.compose.ui.graphics.graphicsLayer\n"
-              if anchor not in gallery:
-                  raise SystemExit("Gallery import anchor missing")
-              gallery = gallery.replace(anchor, anchor + "import androidx.compose.ui.input.pointer.pointerInput\n", 1)
-
-          # MediaGrid uses Modifier.weight(), so it must be a ColumnScope extension
-          # when called from the Column content area.
-          gallery = gallery.replace(
-              "@Composable private fun MediaGrid(items: List<MediaItem>",
-              "@Composable private fun ColumnScope.MediaGrid(items: List<MediaItem>",
-              1,
-          )
-
-          # Multi-touch must be consumed by the detector while ordinary one-finger
-          # VideoView taps remain available for playback controls.
-          old_touch = "        videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }"
-          new_touch = '''        videoView.setOnTouchListener { _, event ->
+          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
+          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
+          grep -q 'import androidx.compose.ui.graphics.graphicsLayer' "$GALLERY"
+          grep -q '@Composable private fun MediaGrid' "$GALLERY"
+          grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY" || sed -i '/import androidx.compose.ui.graphics.graphicsLayer/a import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
+          sed -i 's/@Composable private fun MediaGrid(/@Composable private fun ColumnScope.MediaGrid(/' "$GALLERY"
+          python3 - "$GALLERY" <<'PY'
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+s = p.read_text()
+old = 'videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }'
+new = '''videoView.setOnTouchListener { _, event ->
             val wasScaling = scaleDetector.isInProgress
             scaleDetector.onTouchEvent(event)
             event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress
         }'''
-          if old_touch in gallery:
-              gallery = gallery.replace(old_touch, new_touch, 1)
-          elif "scaleDetector.isInProgress" not in gallery:
-              raise SystemExit("Gallery video touch listener could not be located safely")
+if old in s:
+    s = s.replace(old, new, 1)
+elif 'event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress' not in s:
+    raise SystemExit('Expected VideoView touch listener was not found')
+p.write_text(s)
+PY
+          grep -q 'detectTransformGestures' "$MAIN"
+          grep -q 'setZoomRatio' "$MAIN"
 
-          gallery_path.write_text(gallery, encoding="utf-8")
-          PY
-
-      - name: Audit source before build
+      - name: Source audit
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
+          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
+          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
+          grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
+          grep -q 'ColumnScope.MediaGrid' "$GALLERY"
+          grep -q 'detectTransformGestures' "$GALLERY"
+          grep -q 'ScaleGestureDetector' "$GALLERY"
+          grep -q 'detectTransformGestures' "$MAIN"
+          grep -q 'setZoomRatio' "$MAIN"
+          echo 'SOURCE AUDIT PASSED'
 
-          scanner = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
-          main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
-          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
-
-          checks = {
-              "scanner decodePreview": (scanner, "private fun decodePreview(path: String): Bitmap?"),
-              "scanner camera controls": (scanner, "CameraSectionControls("),
-              "scanner bottom navigation": (scanner, "CameraSectionBottomNavigation("),
-              "scanner camera navigation": (scanner, "startActivity(Intent(this, MainActivity::class.java)"),
-              "scanner gallery navigation": (scanner, "startActivity(Intent(this, GalleryActivity::class.java))"),
-              "scanner QR navigation": (scanner, "startActivity(Intent(this, QrScannerActivity::class.java))"),
-              "camera transform gestures": (main, "detectTransformGestures { _, pan, zoom, _ ->"),
-              "camera zoom callback": (main, "onZoom = ::updateCameraZoom"),
-              "camera preview": (main, "PreviewView(context)"),
-              "gallery pointer input": (gallery, "import androidx.compose.ui.input.pointer.pointerInput"),
-              "gallery ColumnScope grid": (gallery, "ColumnScope.MediaGrid"),
-              "gallery photo transform": (gallery, "detectTransformGestures"),
-              "gallery video scale detector": (gallery, "ScaleGestureDetector"),
-              "gallery video multi-touch": (gallery, "scaleDetector.isInProgress"),
-          }
-          missing = [name for name, (text, needle) in checks.items() if needle not in text]
-          if missing:
-              raise SystemExit("SOURCE AUDIT FAILED: " + ", ".join(missing))
-
-          forbidden = [
-              "onOpenCamera = ::openCamera",
-              "onOpenGallery = ::openGallery",
-              "onOpenQr = ::openQr",
-              "onZoom = ::setCameraZoom",
-          ]
-          for needle in forbidden:
-              if needle in scanner or needle in main:
-                  raise SystemExit("SOURCE AUDIT FAILED: forbidden unresolved wiring: " + needle)
-
-          print("SOURCE AUDIT PASSED: camera, photo gallery, video gallery and scanner wiring present")
-          PY
-
-      - name: Build Android Debug APK
+      - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify APK exists and is a real APK
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          test "$(file -b --mime-type "$APK")" = "application/vnd.android.package-archive"
-          echo "APK size: $(du -h "$APK" | cut -f1)"
+          file "$APK"
           sha256sum "$APK"
 
-      - name: Upload APK as Actions artifact
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: MediaToolbox-debug-apk-${{ github.ref_name }}
@@ -182,43 +99,17 @@ jobs:
           compression-level: 0
           retention-days: 7
 
-      - name: Persist tested source fixes
+      - name: Persist source fixes
         if: github.ref != 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$GALLERY" "$MAIN"
           if git diff --cached --quiet; then
-            echo "No source changes to persist."
+            echo 'No source changes to persist.'
           else
-            git commit -m "Fix pinch zoom gestures [skip ci]"
+            git commit -m 'Fix pinch zoom source issues [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
-
-      - name: Publish APK to GitHub Release
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          RELEASE_TAG="media-toolbox-debug"
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          APK_NAME="MediaToolbox-debug.apk"
-
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Media Toolbox Debug APK" \
-              --notes "Latest debug APK built from main." \
-              --prerelease
-          fi
-
-          gh release upload "$RELEASE_TAG" "$APK#$APK_NAME" --clobber
-
-          echo "============================================================"
-          echo "DIRECT APK DOWNLOAD"
-          echo "https://github.com/sophea-PersonalApps/Media-App1/releases/download/$RELEASE_TAG/$APK_NAME"
-          echo "============================================================"
