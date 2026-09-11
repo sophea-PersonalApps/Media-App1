@@ -74,12 +74,13 @@ jobs:
               raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
           PY
 
-      - name: Apply camera build-safe source fix
+      - name: Apply required source fixes
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
           text = camera.read_text(encoding="utf-8")
           text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
@@ -87,7 +88,38 @@ jobs:
           if "private fun updateCameraZoom(value: Float)" not in text:
               raise SystemExit("Camera zoom function fix was not applied")
           camera.write_text(text, encoding="utf-8")
+
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
+          text = gallery.read_text(encoding="utf-8")
+
+          if "import androidx.compose.ui.input.pointer.pointerInput" not in text:
+              marker = "import androidx.compose.ui.graphics.graphicsLayer"
+              if marker not in text:
+                  raise SystemExit("Gallery import insertion point not found")
+              text = text.replace(marker, marker + "\nimport androidx.compose.ui.input.pointer.pointerInput", 1)
+
+          old_signature = "private fun MediaGrid("
+          new_signature = "private fun ColumnScope.MediaGrid("
+          if new_signature not in text:
+              if old_signature not in text:
+                  raise SystemExit("MediaGrid declaration not found")
+              text = text.replace(old_signature, new_signature, 1)
+
+          gallery.write_text(text, encoding="utf-8")
           PY
+
+      - name: Source audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
+          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
+          grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
+          grep -q 'ColumnScope.MediaGrid' "$GALLERY"
+          grep -q 'detectTransformGestures' "$GALLERY"
+          grep -q 'detectTransformGestures' "$MAIN"
+          grep -q 'setZoomRatio' "$MAIN"
+          echo 'SOURCE AUDIT PASSED'
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -110,3 +142,18 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+      - name: Persist source fixes on test branch
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+          if git diff --cached --quiet; then
+            echo 'No source changes to persist.'
+          else
+            git commit -m 'Fix pinch zoom source compilation issues [skip ci]'
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
