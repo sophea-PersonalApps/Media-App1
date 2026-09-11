@@ -3,9 +3,7 @@ name: Android Debug APK
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-      - 'fix/**'
+    branches: [ main, 'fix/**' ]
 
 permissions:
   contents: write
@@ -14,83 +12,97 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check out source
+        uses: actions/checkout@v6
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: true
 
-      - name: Install Android SDK
-        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+      - name: Install Android SDK platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.13'
 
-      - name: Apply safe source fixes
+      - name: Validate scanner source
         shell: bash
         run: |
-          set -euo pipefail
-          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
-          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
-          grep -q 'import androidx.compose.ui.graphics.graphicsLayer' "$GALLERY"
-          grep -q '@Composable private fun MediaGrid' "$GALLERY"
-          grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY" || sed -i '/import androidx.compose.ui.graphics.graphicsLayer/a import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
-          sed -i 's/@Composable private fun MediaGrid(/@Composable private fun ColumnScope.MediaGrid(/' "$GALLERY"
-          python3 - "$GALLERY" <<'PY'
-import sys
-from pathlib import Path
-p = Path(sys.argv[1])
-s = p.read_text()
-old = 'videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }'
-new = '''videoView.setOnTouchListener { _, event ->
-            val wasScaling = scaleDetector.isInProgress
-            scaleDetector.onTouchEvent(event)
-            event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress
-        }'''
-if old in s:
-    s = s.replace(old, new, 1)
-elif 'event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress' not in s:
-    raise SystemExit('Expected VideoView touch listener was not found')
-p.write_text(s)
-PY
-          grep -q 'detectTransformGestures' "$MAIN"
-          grep -q 'setZoomRatio' "$MAIN"
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
+          required = [
+              "private fun decodePreview(path: String): Bitmap?",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "startActivity(Intent(this, MainActivity::class.java)",
+              "startActivity(Intent(this, GalleryActivity::class.java))",
+              "startActivity(Intent(this, QrScannerActivity::class.java))",
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
+          PY
 
-      - name: Source audit
+      - name: Verify camera source wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
+          required = [
+              "currentLens: Int,",
+              "mode: CameraSectionMode",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "CameraSectionMode.SCAN",
+              "CameraSectionMode.QR",
+              "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
+          PY
+
+      - name: Apply camera build-safe source fix
         shell: bash
         run: |
           set -euo pipefail
-          GALLERY="app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt"
-          MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
-          grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
-          grep -q 'ColumnScope.MediaGrid' "$GALLERY"
-          grep -q 'detectTransformGestures' "$GALLERY"
-          grep -q 'ScaleGestureDetector' "$GALLERY"
-          grep -q 'detectTransformGestures' "$MAIN"
-          grep -q 'setZoomRatio' "$MAIN"
-          echo 'SOURCE AUDIT PASSED'
+          python3 - <<'PY'
+          from pathlib import Path
+          camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
+          text = camera.read_text(encoding="utf-8")
+          text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
+          text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
+          if "private fun updateCameraZoom(value: Float)" not in text:
+              raise SystemExit("Camera zoom function fix was not applied")
+          camera.write_text(text, encoding="utf-8")
+          PY
 
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify APK
+      - name: Verify APK exists and is a real APK
         shell: bash
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          file "$APK"
+          test "$(file -b --mime-type "$APK")" = "application/vnd.android.package-archive"
+          echo "APK size: $(du -h "$APK" | cut -f1)"
           sha256sum "$APK"
 
-      - name: Upload debug APK
+      - name: Upload APK as Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: MediaToolbox-debug-apk-${{ github.ref_name }}
@@ -98,18 +110,3 @@ PY
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-
-      - name: Persist source fixes
-        if: github.ref != 'refs/heads/main'
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add "$GALLERY" "$MAIN"
-          if git diff --cached --quiet; then
-            echo 'No source changes to persist.'
-          else
-            git commit -m 'Fix pinch zoom source issues [skip ci]'
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
