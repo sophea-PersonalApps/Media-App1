@@ -34,8 +34,7 @@ new_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(A
             detectTransformGestures(panZoomLock = true) { _, pan, zoom, _ ->
                 val cameraMode = mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO
                 if (cameraMode && kotlin.math.abs(zoom - 1f) > 0.001f) {
-                    val maxZoom = 10f
-                    gestureZoom = (gestureZoom * zoom).coerceIn(1f, maxZoom)
+                    gestureZoom = (gestureZoom * zoom).coerceIn(1f, 10f)
                     onZoom(gestureZoom)
                     horizontalDrag = 0f
                 } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
@@ -57,9 +56,16 @@ new_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(A
 text = replace_once(text, old_camera, new_camera, "camera gesture block")
 MAIN.write_text(text, encoding="utf-8")
 
-# GALLERY: retain zoom and add one-finger pan after zooming. Positive pan.y moves
-# the enlarged image down, revealing the upper part of the photo as requested.
+# GALLERY: pinch zoom plus one-finger pan after zooming. Positive pan.y moves the
+# enlarged image down, exposing the upper part of the photo. Use onSizeChanged
+# because viewport dimensions are needed inside the pointerInput coroutine.
 text = GALLERY.read_text(encoding="utf-8")
+if "import androidx.compose.ui.layout.onSizeChanged" not in text:
+    anchor = "import androidx.compose.ui.graphics.graphicsLayer\n"
+    if anchor in text:
+        text = text.replace(anchor, anchor + "import androidx.compose.ui.layout.onSizeChanged\n", 1)
+    else:
+        text = text.replace("import androidx.compose.ui", "import androidx.compose.ui.layout.onSizeChanged\nimport androidx.compose.ui", 1)
 old_gallery = '''                    bitmap?.let {
                         Box(Modifier.fillMaxSize().pointerInput(uri) {
                             detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
@@ -71,23 +77,30 @@ old_gallery = '''                    bitmap?.let {
 new_gallery = '''                    bitmap?.let {
                         var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
                         var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        val density = androidx.compose.ui.platform.LocalDensity.current
-                        BoxWithConstraints(
-                            Modifier.fillMaxSize().pointerInput(uri) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                    val maxPanX = with(density) { maxWidth.toPx() } * (newZoom - 1f) / 2f
-                                    val maxPanY = with(density) { maxHeight.toPx() } * (newZoom - 1f) / 2f
-                                    photoZoom = newZoom
-                                    if (newZoom <= 1f) {
-                                        photoPanX = 0f
-                                        photoPanY = 0f
-                                    } else {
-                                        photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
-                                        photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                    }
+                        var viewportWidth by remember(uri) { mutableIntStateOf(0) }
+                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .onSizeChanged { size ->
+                                    viewportWidth = size.width
+                                    viewportHeight = size.height
                                 }
-                            },
+                                .pointerInput(uri) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
+                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
+                                        photoZoom = newZoom
+                                        if (newZoom <= 1f) {
+                                            photoPanX = 0f
+                                            photoPanY = 0f
+                                        } else {
+                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
+                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
+                                        }
+                                    }
+                                },
                             contentAlignment = Alignment.Center
                         ) {
                             Image(
@@ -107,7 +120,6 @@ new_gallery = '''                    bitmap?.let {
 text = replace_once(text, old_gallery, new_gallery, "gallery viewer gesture block")
 GALLERY.write_text(text, encoding="utf-8")
 
-# Hard fail if any competing/old implementations survived.
 main = MAIN.read_text(encoding="utf-8")
 gallery = GALLERY.read_text(encoding="utf-8")
 required = [
@@ -118,6 +130,7 @@ required = [
     "var photoPanY by rememberSaveable(uri)",
     "translationX = photoPanX",
     "translationY = photoPanY",
+    "onSizeChanged { size ->",
 ]
 for item in required:
     if item not in main + gallery:
