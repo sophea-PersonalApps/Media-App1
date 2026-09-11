@@ -12,42 +12,53 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 text = GALLERY.read_text(encoding="utf-8")
 
-# ALBUMS: the previous AlbumGrid put a clickable parent around MediaThumbnail,
-# but MediaThumbnail itself has a combinedClickable that consumes the tap. Put
-# the album click on the thumbnail itself so album covers actually open.
-old_album = '''@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth().clickable { onClick(album) }) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f)); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
+# ALBUM TRANSITION: clear the old gallery list immediately when an album is
+# selected, and show a loading state while its MediaStore query completes.
+text = replace_once(
+    text,
+    '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n',
+    '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var mediaLoading by remember { mutableStateOf(false) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n',
+    "media loading state",
+)
+old_effect = '''    LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
+        else if (selectedAlbumId != null) media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
+        else media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+    }
 '''
-new_album = '''@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth()) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f), onClick = { onClick(album) }); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
+new_effect = '''    LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
+        mediaLoading = true
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
+            albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
+        } else if (selectedAlbumId != null) {
+            media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
+        } else {
+            media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+        }
+        mediaLoading = false
+    }
 '''
-text = replace_once(text, old_album, new_album, "album grid")
+text = replace_once(text, old_effect, new_effect, "media loading effect")
+text = replace_once(
+    text,
+    'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }',
+    'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> media = emptyList(); selectedAlbumId = album.id; selectedAlbumName = album.name }',
+    "album selection clears stale media",
+)
+old_grid = '''            if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
+            else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
+'''
+new_grid = '''            if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
+            else if (mediaLoading) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
+            else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
+'''
+text = replace_once(text, old_grid, new_grid, "album loading display")
 
-# VIDEO VIEWER TOP BAR: keep the exact same Back / Share / action / Delete
-# structure as photos, replacing Edit with a speed button for videos.
-old_header = '''    var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
-    var photoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
-    Surface(Modifier.fillMaxSize(), color = Color.Black) {
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
-                onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
-                IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
-            }
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isVideo) VideoPlayer(uri) else {
-'''
-new_header = '''    var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
-    var photoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
-    var videoSpeed by rememberSaveable(uri) { mutableFloatStateOf(1f) }
-    var speedMenuOpen by rememberSaveable(uri) { mutableStateOf(false) }
-    Surface(Modifier.fillMaxSize(), color = Color.Black) {
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
-                if (isVideo) {
+# VIDEO ACTION: make Speed a real IconButton in the exact same top action-bar
+# position as Edit is for photos. The dropdown is anchored to that button.
+if 'import androidx.compose.material.icons.filled.Speed' not in text:
+    text = replace_once(text, 'import androidx.compose.material.icons.filled.Share\n', 'import androidx.compose.material.icons.filled.Share\nimport androidx.compose.material.icons.filled.Speed\n', "speed icon import")
+old_speed = '''                if (isVideo) {
                     Box {
                         TextButton(onClick = { speedMenuOpen = true }) { Text("${videoSpeed}x", color = Color.White, fontWeight = FontWeight.Bold) }
                         DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
@@ -57,46 +68,29 @@ new_header = '''    var confirmDelete by rememberSaveable(uri) { mutableStateOf(
                         }
                     }
                 } else {
-                    onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
-                }
-                IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
-            }
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                if (isVideo) VideoPlayer(uri, videoSpeed) else {
 '''
-text = replace_once(text, old_header, new_header, "media viewer video action bar")
+new_speed = '''                if (isVideo) {
+                    Box {
+                        IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed, "Playback speed", tint = Color.White) }
+                        DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                            listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed ->
+                                DropdownMenuItem(text = { Text("${selectedSpeed}x", fontWeight = if (videoSpeed == selectedSpeed) FontWeight.Bold else FontWeight.Normal) }, onClick = { videoSpeed = selectedSpeed; speedMenuOpen = false })
+                            }
+                        }
+                    }
+                } else {
+'''
+text = replace_once(text, old_speed, new_speed, "video speed icon action")
 
-# VIDEO PLAYER: speed is now controlled by the viewer's top action button.
-text = replace_once(text, '@Composable private fun VideoPlayer(uri: Uri) {', '@Composable private fun VideoPlayer(uri: Uri, speed: Float) {', "video player signature")
-text = replace_once(text, '    var speed by remember(uri) { mutableFloatStateOf(1f) }\n    var speedMenuOpen by remember(uri) { mutableStateOf(false) }\n', '', "old video speed state")
-old_speed_overlay = '''        if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
-            Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }
-            DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed -> DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { speed = selectedSpeed; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed } } }; speedMenuOpen = false }) } }
-        }
-'''
-text = replace_once(text, old_speed_overlay, '', "old video speed overlay")
-anchor = '''    LaunchedEffect(uri, retryKey) {
-'''
-insert = '''    LaunchedEffect(speed, activePlayer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            activePlayer?.let { player ->
-                runCatching { player.playbackParams = player.playbackParams.apply { this.speed = speed } }
-            }
-        }
-    }
-    LaunchedEffect(uri, retryKey) {
-'''
-text = replace_once(text, anchor, insert, "video speed effect anchor")
-
-# Final audit: prove both requested fixes are present and the old video speed
-# overlay / broken album parent click are gone.
 checks = {
-    "album thumbnail owns click": 'MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f), onClick = { onClick(album) })' in text,
-    "video speed state": 'var videoSpeed by rememberSaveable(uri)' in text,
-    "video speed top button": 'Text("${videoSpeed}x", color = Color.White' in text,
-    "video speed menu": 'speedMenuOpen = true' in text,
+    "album loading state": 'var mediaLoading by remember { mutableStateOf(false) }' in text,
+    "album query loading": 'mediaLoading = true' in text and 'mediaLoading = false' in text,
+    "album clears stale media": 'media = emptyList(); selectedAlbumId = album.id' in text,
+    "album loading indicator": 'else if (mediaLoading) Box(Modifier.fillMaxWidth().weight(1f)' in text,
+    "speed icon import": 'import androidx.compose.material.icons.filled.Speed' in text,
+    "speed is top icon button": 'IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed, "Playback speed"' in text,
+    "video speed menu": 'DropdownMenu(expanded = speedMenuOpen' in text,
     "video player receives speed": 'VideoPlayer(uri, videoSpeed)' in text,
-    "old video speed overlay removed": 'Box(Modifier.align(Alignment.TopEnd).padding(12.dp))' not in text,
 }
 failed = [name for name, ok in checks.items() if not ok]
 for name, ok in checks.items():
@@ -104,4 +98,4 @@ for name, ok in checks.items():
 if failed:
     raise SystemExit("GALLERY UI AUDIT FAILED: " + "; ".join(failed))
 GALLERY.write_text(text, encoding="utf-8")
-print("Video viewer actions and album opening implementation applied and audited.")
+print("Album transition flash removed and video Speed top action implemented.")
