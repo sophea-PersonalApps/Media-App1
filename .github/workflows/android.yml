@@ -83,22 +83,126 @@ jobs:
           if missing: raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
           PY
 
-      - name: Apply camera build-safe source fix
+      - name: Apply reliable zoom source fixes
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
-          text = camera.read_text(encoding="utf-8")
+          import re
+
+          main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
+          text = main.read_text(encoding="utf-8")
+
           text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
           text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
-          if "private fun updateCameraZoom(value: Float)" not in text:
-              raise SystemExit("Camera zoom function fix was not applied")
-          camera.write_text(text, encoding="utf-8")
+
+          old_gesture = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
+            var drag = 0f
+            detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
+                when { drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1]); drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1]) }
+                drag = 0f
+            })
+        })
+        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
+                detectTransformGestures { _, _, zoom, _ -> onZoom(cameraZoom * zoom) }
+            })
+        }
+'''
+          new_gesture = '''        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens, cameraZoom) {
+                detectTransformGestures { _, pan, zoom, _ ->
+                    if (zoom != 1f) {
+                        onZoom(cameraZoom * zoom)
+                    } else if (cameraZoom <= 1.001f && kotlin.math.abs(pan.x) > 55f && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y) * 1.25f) {
+                        when {
+                            pan.x < 0f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1])
+                            pan.x > 0f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1])
+                        }
+                    }
+                }
+            })
+        } else {
+            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
+                detectHorizontalDragGestures(onHorizontalDrag = { _, _ -> }, onDragEnd = {})
+            })
+        }
+'''
+          if old_gesture in text:
+              text = text.replace(old_gesture, new_gesture)
+          elif "detectTransformGestures { _, pan, zoom, _ ->" not in text:
+              raise SystemExit("Camera gesture block was not found")
+
+          text = text.replace("import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n", "import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n")
+          main.write_text(text, encoding="utf-8")
+
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
+          g = gallery.read_text(encoding="utf-8")
+
+          old_photo = '''                        Box(Modifier.fillMaxSize().pointerInput(uri) {
+                            detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
+                        }, contentAlignment = Alignment.Center) {
+                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom), contentScale = ContentScale.Fit)
+                        }
+'''
+          new_photo = '''                        var photoOffsetX by remember(uri) { mutableFloatStateOf(0f) }
+                        var photoOffsetY by remember(uri) { mutableFloatStateOf(0f) }
+                        Box(Modifier.fillMaxSize().pointerInput(uri) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                val nextZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                photoZoom = nextZoom
+                                if (nextZoom <= 1.001f) {
+                                    photoOffsetX = 0f
+                                    photoOffsetY = 0f
+                                } else {
+                                    val maxX = size.width * (nextZoom - 1f) / 2f
+                                    val maxY = size.height * (nextZoom - 1f) / 2f
+                                    photoOffsetX = (photoOffsetX + pan.x).coerceIn(-maxX, maxX)
+                                    photoOffsetY = (photoOffsetY + pan.y).coerceIn(-maxY, maxY)
+                                }
+                            }
+                        }, contentAlignment = Alignment.Center) {
+                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom, translationX = photoOffsetX, translationY = photoOffsetY), contentScale = ContentScale.Fit)
+                        }
+'''
+          if old_photo in g:
+              g = g.replace(old_photo, new_photo)
+          else:
+              raise SystemExit("Gallery photo gesture block was not found")
+
+          old_touch = '''        videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }
+'''
+          new_touch = '''        videoView.setOnTouchListener { _, event ->
+            val wasScaling = scaleDetector.isInProgress
+            scaleDetector.onTouchEvent(event)
+            event.pointerCount >= 2 || wasScaling || scaleDetector.isInProgress
+        }
+'''
+          if old_touch in g:
+              g = g.replace(old_touch, new_touch)
+          else:
+              raise SystemExit("Video touch listener was not found")
+
+          gallery.write_text(g, encoding="utf-8")
           PY
 
-      - name: Build debug APK
+      - name: Verify zoom source fixes were applied
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
+          required_main = ["detectTransformGestures { _, pan, zoom, _ ->", "onZoom = ::updateCameraZoom"]
+          required_gallery = ["photoOffsetX", "photoOffsetY", "scaleDetector.isInProgress"]
+          for item in required_main:
+              if item not in main: raise SystemExit("Missing camera fix: " + item)
+          for item in required_gallery:
+              if item not in gallery: raise SystemExit("Missing gallery/video fix: " + item)
+          PY
+
+      - name: Build Android Debug APK
         run: gradle :app:assembleDebug --stacktrace
 
       - name: Verify APK exists and is a real APK
@@ -119,6 +223,21 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
+      - name: Commit tested source fixes back to branch
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+          if git diff --cached --quiet; then
+            echo "No source changes to commit."
+          else
+            git commit -m "Fix pinch zoom gestures"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
 
       - name: Publish APK to GitHub Release
         if: github.ref == 'refs/heads/main'
