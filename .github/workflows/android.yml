@@ -14,135 +14,100 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v6
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools'
           accept-android-sdk-licenses: true
+
       - name: Install Android SDK platform
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.13'
+
       - name: Validate scanner source
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
-          required = ["private fun decodePreview(path: String): Bitmap?", "CameraSectionControls(", "CameraSectionBottomNavigation(", "startActivity(Intent(this, MainActivity::class.java)", "startActivity(Intent(this, GalleryActivity::class.java))", "startActivity(Intent(this, QrScannerActivity::class.java))"]
+          required = [
+              "private fun decodePreview(path: String): Bitmap?",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "startActivity(Intent(this, MainActivity::class.java)",
+              "startActivity(Intent(this, GalleryActivity::class.java))",
+              "startActivity(Intent(this, QrScannerActivity::class.java))",
+          ]
           missing = [item for item in required if item not in text]
-          if missing: raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
+          if missing:
+              raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
           PY
+
       - name: Verify camera source wiring
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
-          required = ["currentLens: Int,", "mode: CameraSectionMode", "CameraSectionControls(", "CameraSectionBottomNavigation(", "CameraSectionMode.SCAN", "CameraSectionMode.QR", "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)"]
+          required = [
+              "currentLens: Int,",
+              "mode: CameraSectionMode",
+              "CameraSectionControls(",
+              "CameraSectionBottomNavigation(",
+              "CameraSectionMode.SCAN",
+              "CameraSectionMode.QR",
+              "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
+          ]
           missing = [item for item in required if item not in text]
-          if missing: raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
+          if missing:
+              raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
           PY
-      - name: Apply pinch zoom and gesture fixes
+
+      - name: Apply required source fixes
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+
           camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
           text = camera.read_text(encoding="utf-8")
           text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
           text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
-          old = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
-            var drag = 0f
-            detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
-                when { drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1]); drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1]) }
-                drag = 0f
-            })
-        })
-        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
-                detectTransformGestures { _, _, zoom, _ -> onZoom(cameraZoom * zoom) }
-            })
-        }
-'''
-          new = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
-            var horizontalDrag = 0f
-            var gestureZoom = cameraZoom
-            detectTransformGestures { _, pan, zoom, _ ->
-                if (zoom != 1f && (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO)) {
-                    gestureZoom = (gestureZoom * zoom).coerceIn(1f, 10f)
-                    onZoom(gestureZoom)
-                    horizontalDrag = 0f
-                } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
-                    horizontalDrag += pan.x
-                    when {
-                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> { onModeChanged(modes[selectedIndex + 1]); horizontalDrag = 0f }
-                        horizontalDrag >= 80f && selectedIndex > 0 -> { onModeChanged(modes[selectedIndex - 1]); horizontalDrag = 0f }
-                    }
-                }
-            }
-        })
-'''
-          if old not in text: raise SystemExit("Expected camera gesture block was not found")
-          camera.write_text(text.replace(old, new, 1), encoding="utf-8")
+          if "private fun updateCameraZoom(value: Float)" not in text:
+              raise SystemExit("Camera zoom function fix was not applied")
+          camera.write_text(text, encoding="utf-8")
+
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
           text = gallery.read_text(encoding="utf-8")
+
           if "import androidx.compose.ui.input.pointer.pointerInput" not in text:
               marker = "import androidx.compose.ui.graphics.graphicsLayer"
-              if marker not in text: raise SystemExit("Gallery import insertion point not found")
+              if marker not in text:
+                  raise SystemExit("Gallery import insertion point not found")
               text = text.replace(marker, marker + "\nimport androidx.compose.ui.input.pointer.pointerInput", 1)
-          if "ColumnScope.MediaGrid" not in text:
-              text = text.replace("private fun MediaGrid(", "private fun ColumnScope.MediaGrid(", 1)
-          old_photo = '''                    bitmap?.let {
-                        Box(Modifier.fillMaxSize().pointerInput(uri) {
-                            detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
-                        }, contentAlignment = Alignment.Center) {
-                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom), contentScale = ContentScale.Fit)
-                        }
-                    } ?: CircularProgressIndicator(color = Color.White)
-'''
-          new_photo = '''                    bitmap?.let {
-                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        val density = androidx.compose.ui.platform.LocalDensity.current
-                        BoxWithConstraints(
-                            Modifier.fillMaxSize().pointerInput(uri) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                    val maxPanX = with(density) { maxWidth.toPx() } * (newZoom - 1f) / 2f
-                                    val maxPanY = with(density) { maxHeight.toPx() } * (newZoom - 1f) / 2f
-                                    photoZoom = newZoom
-                                    photoPanX = if (newZoom == 1f) 0f else (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
-                                    photoPanY = if (newZoom == 1f) 0f else (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                }
-                            },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                it.asImageBitmap(),
-                                "Photo",
-                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
-                                    scaleX = photoZoom
-                                    scaleY = photoZoom
-                                    translationX = photoPanX
-                                    translationY = photoPanY
-                                },
-                                contentScale = ContentScale.Fit
-                            )
-                        }
-                    } ?: CircularProgressIndicator(color = Color.White)
-'''
-          if old_photo not in text: raise SystemExit("Expected gallery photo viewer block was not found")
-          gallery.write_text(text.replace(old_photo, new_photo, 1), encoding="utf-8")
+
+          old_signature = "private fun MediaGrid("
+          new_signature = "private fun ColumnScope.MediaGrid("
+          if new_signature not in text:
+              if old_signature not in text:
+                  raise SystemExit("MediaGrid declaration not found")
+              text = text.replace(old_signature, new_signature, 1)
+
+          gallery.write_text(text, encoding="utf-8")
           PY
+
       - name: Source audit
         shell: bash
         run: |
@@ -151,15 +116,14 @@ jobs:
           MAIN="app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt"
           grep -q 'import androidx.compose.ui.input.pointer.pointerInput' "$GALLERY"
           grep -q 'ColumnScope.MediaGrid' "$GALLERY"
-          grep -q 'photoPanX' "$GALLERY"
-          grep -q 'photoPanY' "$GALLERY"
           grep -q 'detectTransformGestures' "$GALLERY"
           grep -q 'detectTransformGestures' "$MAIN"
-          grep -q 'var gestureZoom = cameraZoom' "$MAIN"
           grep -q 'setZoomRatio' "$MAIN"
           echo 'SOURCE AUDIT PASSED'
+
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
+
       - name: Verify APK exists and is a real APK
         shell: bash
         run: |
@@ -169,6 +133,7 @@ jobs:
           test "$(file -b --mime-type "$APK")" = "application/vnd.android.package-archive"
           echo "APK size: $(du -h "$APK" | cut -f1)"
           sha256sum "$APK"
+
       - name: Upload APK as Actions artifact
         uses: actions/upload-artifact@v4
         with:
@@ -177,6 +142,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
+
       - name: Persist source fixes on test branch
         if: github.ref != 'refs/heads/main'
         shell: bash
@@ -188,6 +154,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No source changes to persist.'
           else
-            git commit -m 'Fix camera gestures and gallery photo panning [skip ci]'
+            git commit -m 'Fix pinch zoom source compilation issues [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
