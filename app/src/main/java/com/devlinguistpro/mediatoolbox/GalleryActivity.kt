@@ -64,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -258,10 +259,45 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                     var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
                     LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
                     bitmap?.let {
-                        Box(Modifier.fillMaxSize().pointerInput(uri) {
-                            detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
-                        }, contentAlignment = Alignment.Center) {
-                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom), contentScale = ContentScale.Fit)
+                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+                        var viewportWidth by remember(uri) { mutableIntStateOf(0) }
+                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .onSizeChanged { size ->
+                                    viewportWidth = size.width
+                                    viewportHeight = size.height
+                                }
+                                .pointerInput(uri) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
+                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
+                                        photoZoom = newZoom
+                                        if (newZoom <= 1f) {
+                                            photoPanX = 0f
+                                            photoPanY = 0f
+                                        } else {
+                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
+                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
+                                        }
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                it.asImageBitmap(),
+                                "Photo",
+                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                                    scaleX = photoZoom
+                                    scaleY = photoZoom
+                                    translationX = photoPanX
+                                    translationY = photoPanY
+                                },
+                                contentScale = ContentScale.Fit
+                            )
                         }
                     } ?: CircularProgressIndicator(color = Color.White)
                 }
