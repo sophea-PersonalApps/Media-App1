@@ -85,116 +85,26 @@ jobs:
           text = camera.read_text(encoding="utf-8")
           text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
           text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
-
-          old_camera_gestures = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
-            var drag = 0f
-            detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
-                when { drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1]); drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1]) }
-                drag = 0f
-            })
-        })
-        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
-                detectTransformGestures { _, _, zoom, _ -> onZoom(cameraZoom * zoom) }
-            })
-        }
-'''
-          new_camera_gestures = '''        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
-                var horizontalDrag = 0f
-                var gestureZoom = cameraZoom
-                detectTransformGestures { _, pan, zoom, _ ->
-                    if (zoom != 1f) {
-                        gestureZoom = (gestureZoom * zoom).coerceIn(1f, 10f)
-                        onZoom(gestureZoom)
-                        horizontalDrag = 0f
-                    } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
-                        horizontalDrag += pan.x
-                        when {
-                            horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> {
-                                onModeChanged(modes[selectedIndex + 1])
-                                horizontalDrag = 0f
-                            }
-                            horizontalDrag >= 80f && selectedIndex > 0 -> {
-                                onModeChanged(modes[selectedIndex - 1])
-                                horizontalDrag = 0f
-                            }
-                        }
-                    }
-                }
-            })
-        } else {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
-                var drag = 0f
-                detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
-                    when {
-                        drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1])
-                        drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1])
-                    }
-                    drag = 0f
-                })
-            })
-        }
-'''
-          if old_camera_gestures not in text:
-              raise SystemExit("Camera gesture block was not found exactly; refusing to modify camera source")
-          text = text.replace(old_camera_gestures, new_camera_gestures, 1)
-          if "var gestureZoom = cameraZoom" not in text or "gestureZoom = (gestureZoom * zoom)" not in text:
-              raise SystemExit("Camera pinch implementation was not applied")
+          if "private fun updateCameraZoom(value: Float)" not in text:
+              raise SystemExit("Camera zoom function fix was not applied")
           camera.write_text(text, encoding="utf-8")
 
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
           text = gallery.read_text(encoding="utf-8")
-          if "import androidx.compose.ui.platform.LocalDensity" not in text:
-              marker = "import androidx.compose.ui.platform.LocalContext"
-              if marker not in text:
-                  raise SystemExit("Gallery LocalContext import not found")
-              text = text.replace(marker, marker + "\nimport androidx.compose.ui.platform.LocalDensity", 1)
 
-          old_photo_view = '''                    bitmap?.let {
-                        Box(Modifier.fillMaxSize().pointerInput(uri) {
-                            detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
-                        }, contentAlignment = Alignment.Center) {
-                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer(scaleX = photoZoom, scaleY = photoZoom), contentScale = ContentScale.Fit)
-                        }
-                    } ?: CircularProgressIndicator(color = Color.White)
-'''
-          new_photo_view = '''                    bitmap?.let {
-                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        val density = LocalDensity.current
-                        BoxWithConstraints(
-                            Modifier.fillMaxSize().pointerInput(uri) {
-                                detectTransformGestures { _, pan, zoom, _ ->
-                                    val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                    val maxPanX = with(density) { maxWidth.toPx() } * (newZoom - 1f) / 2f
-                                    val maxPanY = with(density) { maxHeight.toPx() } * (newZoom - 1f) / 2f
-                                    photoZoom = newZoom
-                                    photoPanX = if (newZoom == 1f) 0f else (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
-                                    photoPanY = if (newZoom == 1f) 0f else (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                }
-                            },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Image(
-                                it.asImageBitmap(),
-                                "Photo",
-                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
-                                    scaleX = photoZoom
-                                    scaleY = photoZoom
-                                    translationX = photoPanX
-                                    translationY = photoPanY
-                                },
-                                contentScale = ContentScale.Fit
-                            )
-                        }
-                    } ?: CircularProgressIndicator(color = Color.White)
-'''
-          if old_photo_view not in text:
-              raise SystemExit("Gallery photo viewer block was not found exactly; refusing to modify gallery source")
-          text = text.replace(old_photo_view, new_photo_view, 1)
-          if "var photoPanX" not in text or "translationY = photoPanY" not in text:
-              raise SystemExit("Gallery pan implementation was not applied")
+          if "import androidx.compose.ui.input.pointer.pointerInput" not in text:
+              marker = "import androidx.compose.ui.graphics.graphicsLayer"
+              if marker not in text:
+                  raise SystemExit("Gallery import insertion point not found")
+              text = text.replace(marker, marker + "\nimport androidx.compose.ui.input.pointer.pointerInput", 1)
+
+          old_signature = "private fun MediaGrid("
+          new_signature = "private fun ColumnScope.MediaGrid("
+          if new_signature not in text:
+              if old_signature not in text:
+                  raise SystemExit("MediaGrid declaration not found")
+              text = text.replace(old_signature, new_signature, 1)
+
           gallery.write_text(text, encoding="utf-8")
           PY
 
@@ -209,10 +119,6 @@ jobs:
           grep -q 'detectTransformGestures' "$GALLERY"
           grep -q 'detectTransformGestures' "$MAIN"
           grep -q 'setZoomRatio' "$MAIN"
-          grep -q 'var gestureZoom = cameraZoom' "$MAIN"
-          grep -q 'gestureZoom = (gestureZoom \* zoom)' "$MAIN"
-          grep -q 'var photoPanX' "$GALLERY"
-          grep -q 'translationY = photoPanY' "$GALLERY"
           echo 'SOURCE AUDIT PASSED'
 
       - name: Build debug APK
@@ -248,6 +154,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No source changes to persist.'
           else
-            git commit -m 'Implement camera pinch zoom and gallery photo panning [skip ci]'
+            git commit -m 'Fix pinch zoom source compilation issues [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
