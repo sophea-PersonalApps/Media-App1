@@ -46,6 +46,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -163,11 +164,18 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
     }
     if (!access.any) { GalleryPermissionScreen(requestPermission, onBack); return }
     var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var mediaLoading by remember { mutableStateOf(false) }
     var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
-        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
-        else if (selectedAlbumId != null) media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
-        else media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+        mediaLoading = true
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
+            albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
+        } else if (selectedAlbumId != null) {
+            media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
+        } else {
+            media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+        }
+        mediaLoading = false
     }
     LaunchedEffect(tab, selectedAlbumId) { selectionMode = false; selectedItems.clear(); showDeleteConfirmation = false }
     if (showDeleteConfirmation) AlertDialog(onDismissRequest = { showDeleteConfirmation = false }, title = { Text("Delete selected media?") }, text = { Text("Delete ${selectedItems.size} selected item${if (selectedItems.size == 1) "" else "s"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { showDeleteConfirmation = false; val uris = selectedItems.values.map { it.uri }; onDeleteBatch(uris) { deleted -> if (deleted) { selectionMode = false; selectedItems.clear(); refreshToken++ } } }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") } })
@@ -179,10 +187,11 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
         }
         if (selectedAlbumId != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }; Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); IconButton(onClick = { refreshToken++ }) { Icon(Icons.Default.Refresh, "Refresh album", tint = Color.White) }
         }
-        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> media = emptyList(); selectedAlbumId = album.id; selectedAlbumName = album.name }
         else {
             val unavailable = (tab == GalleryTab.PHOTOS && !access.images) || (tab == GalleryTab.VIDEOS && !access.videos)
             if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
+            else if (mediaLoading) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
             else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
         }
         GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS }, gallerySelected = true)
@@ -254,10 +263,10 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                 IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                 if (isVideo) {
                     Box {
-                        TextButton(onClick = { speedMenuOpen = true }) { Text("${videoSpeed}x", color = Color.White, fontWeight = FontWeight.Bold) }
+                        IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed, "Playback speed", tint = Color.White) }
                         DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
                             listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed ->
-                                DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { videoSpeed = selectedSpeed; speedMenuOpen = false })
+                                DropdownMenuItem(text = { Text("${selectedSpeed}x", fontWeight = if (videoSpeed == selectedSpeed) FontWeight.Bold else FontWeight.Normal) }, onClick = { videoSpeed = selectedSpeed; speedMenuOpen = false })
                             }
                         }
                     }
