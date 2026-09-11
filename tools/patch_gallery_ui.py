@@ -54,10 +54,13 @@ new_grid = '''            if (unavailable && selectedAlbumId == null) MissingMed
 '''
 text = replace_once(text, old_grid, new_grid, "album loading display")
 
-# VIDEO ACTION: make Speed a real IconButton in the exact same top action-bar
-# position as Edit is for photos. The dropdown is anchored to that button.
+# VIDEO ACTION: make Speed a real IconButton in the same top action-bar
+# position as Edit is for photos. Keep the action bar above the AndroidView
+# used by VideoPlayer so the video cannot cover the controls.
 if 'import androidx.compose.material.icons.filled.Speed' not in text:
     text = replace_once(text, 'import androidx.compose.material.icons.filled.Share\n', 'import androidx.compose.material.icons.filled.Share\nimport androidx.compose.material.icons.filled.Speed\n', "speed icon import")
+if 'import androidx.compose.ui.zIndex' not in text:
+    text = replace_once(text, 'import androidx.compose.ui.viewinterop.AndroidView\n', 'import androidx.compose.ui.viewinterop.AndroidView\nimport androidx.compose.ui.zIndex\n', "zIndex import")
 old_speed = '''                if (isVideo) {
                     Box {
                         TextButton(onClick = { speedMenuOpen = true }) { Text("${videoSpeed}x", color = Color.White, fontWeight = FontWeight.Bold) }
@@ -82,15 +85,22 @@ new_speed = '''                if (isVideo) {
 '''
 text = replace_once(text, old_speed, new_speed, "video speed icon action")
 
+# Ensure the existing viewer action row is above the video AndroidView.
+old_row = '            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {'
+new_row = '            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {'
+text = replace_once(text, old_row, new_row, "video viewer action bar z-index")
+
 checks = {
     "album loading state": 'var mediaLoading by remember { mutableStateOf(false) }' in text,
     "album query loading": 'mediaLoading = true' in text and 'mediaLoading = false' in text,
     "album clears stale media": 'media = emptyList(); selectedAlbumId = album.id' in text,
     "album loading indicator": 'else if (mediaLoading) Box(Modifier.fillMaxWidth().weight(1f)' in text,
     "speed icon import": 'import androidx.compose.material.icons.filled.Speed' in text,
+    "z-index import": 'import androidx.compose.ui.zIndex' in text,
     "speed is top icon button": 'IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed, "Playback speed"' in text,
     "video speed menu": 'DropdownMenu(expanded = speedMenuOpen' in text,
     "video player receives speed": 'VideoPlayer(uri, videoSpeed)' in text,
+    "action bar above video": '.zIndex(10f), verticalAlignment = Alignment.CenterVertically)' in text,
 }
 failed = [name for name, ok in checks.items() if not ok]
 for name, ok in checks.items():
@@ -98,4 +108,4 @@ for name, ok in checks.items():
 if failed:
     raise SystemExit("GALLERY UI AUDIT FAILED: " + "; ".join(failed))
 GALLERY.write_text(text, encoding="utf-8")
-print("Album transition flash removed and video Speed top action implemented.")
+print("Album transition flash removed and video viewer action bar forced above video player.")
