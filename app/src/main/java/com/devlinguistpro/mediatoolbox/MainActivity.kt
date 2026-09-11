@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
                     onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
                     onOpenSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onCycleFlash = ::cycleFlash,
-                    onZoom = ::setCameraZoom,
+                    onZoom = ::updateCameraZoom,
                     onModeChanged = ::changeMode
                 )
             }
@@ -268,7 +268,7 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun setCameraZoom(value: Float) {
+    private fun updateCameraZoom(value: Float) {
         if (currentMode != CameraSectionMode.PHOTO && currentMode != CameraSectionMode.VIDEO) return
         val maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 10f
         cameraZoom = value.coerceIn(1f, maxZoom)
