@@ -86,7 +86,8 @@ jobs:
               "gallery horizontal translation": "translationX = photoPanX" in gallery,
               "gallery vertical translation": "translationY = photoPanY" in gallery,
               "video speed state": "var videoSpeed by rememberSaveable(uri)" in gallery,
-              "video speed top action": 'Text("${videoSpeed}x", color = Color.White' in gallery,
+              "video speed top action": "IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed" in gallery,
+              "video speed menu": "DropdownMenu(expanded = speedMenuOpen" in gallery,
               "video player receives speed": "VideoPlayer(uri, videoSpeed)" in gallery,
               "album click is attached to thumbnail": "onClick = { onClick(album) }" in gallery,
               "old floating video speed control removed": "Box(Modifier.align(Alignment.TopEnd).padding(12.dp))" not in gallery,
@@ -125,7 +126,7 @@ jobs:
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot].com'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
