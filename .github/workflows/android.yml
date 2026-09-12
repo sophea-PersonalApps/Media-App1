@@ -15,6 +15,10 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v6
 
+      - name: Restore GalleryActivity before generated patches
+        shell: bash
+        run: git checkout 90df56f4a1d5282fa5464b757aed9f4e340eb099 -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+
       - name: Apply pinch zoom and gallery pan implementation
         shell: bash
         run: |
@@ -32,6 +36,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/patch_requested_ui.py
+
+      - name: Add gallery swipe gesture import
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/add_gallery_swipe_import.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
@@ -58,8 +68,8 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only
-          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/patch_(pinch_zoom|gallery_ui|requested_ui)\.py|\.github/workflows/android\.yml)$' >/dev/null
-          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/patch_(pinch_zoom|gallery_ui|requested_ui)\.py|\.github/workflows/android\.yml)$' || true)
+          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import)\.py|\.github/workflows/android\.yml)$' >/dev/null
+          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import)\.py|\.github/workflows/android\.yml)$' || true)
           test -z "$unexpected"
 
       - name: Verify requested source changes
@@ -91,6 +101,7 @@ jobs:
               "gallery viewer navigation": "MediaViewer(selectedUri!!, selectedIsVideo, media, selectedIndex" in gallery,
               "gallery video swipe": "currentIndex < items.lastIndex" in gallery,
               "gallery photo pan preserved": "translationX = photoPanX" in gallery and "translationY = photoPanY" in gallery,
+              "gallery swipe import": "import androidx.compose.foundation.gestures.detectHorizontalDragGestures" in gallery,
               "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
               "scanner shared bottom controls": "CameraSectionControls(" in scanner and "CameraSectionBottomNavigation(" in scanner,
               "QR compact back button": "Modifier.align(Alignment.TopStart).statusBarsPadding()" in qr,
