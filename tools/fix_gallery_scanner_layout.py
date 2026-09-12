@@ -28,15 +28,19 @@ if cap_start < 0 or cap_end < 0:
     raise SystemExit("ScannerCapture function boundary not found")
 cap = scanner[cap_start:cap_end]
 
-# Locate the bottom control Column by structure rather than exact whitespace.
-# This survives the generated scanner source having optional padding or comments.
-match = re.search(r"Column\(\s*Modifier\s*\.align\(Alignment\.BottomCenter\)", cap)
-if not match:
-    raise SystemExit("Scanner bottom control column not found")
-a, e = balanced_block(cap, match.start())
+# The scanner source already contains the shared CameraSectionControls, but the
+# legacy page-count/shutter/Finish row is immediately before it. Locate the
+# whole bottom Column from the page-count marker rather than depending on
+# generated alignment/padding whitespace.
+page_marker = cap.find('Text("${pages.size} page${if (pages.size == 1) "" else "s"}')
+if page_marker < 0:
+    raise SystemExit("Scanner page-count control not found")
+column_start = cap.rfind("Column(", 0, page_marker)
+if column_start < 0:
+    raise SystemExit("Scanner bottom control Column not found")
+a, e = balanced_block(cap, column_start)
 replacement = '''Column(
             Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(ComposeColor.Black.copy(alpha = 0.82f))
                 .navigationBarsPadding()
@@ -45,7 +49,7 @@ replacement = '''Column(
                 mode = CameraSectionMode.SCAN,
                 onModeSelected = { scannerModeAction(context, it) },
                 onPrimaryAction = onCapture,
-                onFlip = onFinish,
+                onFlip = onFlip,
                 onMore = { },
                 primaryEnabled = true
             )
@@ -58,8 +62,8 @@ replacement = '''Column(
 cap = cap[:a] + replacement + cap[e:]
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
 
-# ScannerActivity's mode-row navigation is intentionally reversed for returning
-# to Camera, but forward for opening QR.
+# ScannerActivity's mode-row navigation is reversed for returning to Camera,
+# but forward for opening QR.
 scanner = scanner.replace(
     'CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode)))',
     'CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> { context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode))); (context as? ComponentActivity)?.overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) }')
@@ -86,7 +90,7 @@ main_final = MAIN.read_text(encoding="utf-8")
 qr_final = QR.read_text(encoding="utf-8")
 gallery_final = GALLERY.read_text(encoding="utf-8")
 checks = {
-    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap and 'onFlip = onFinish' in cap,
+    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
     "gallery interactive pager": 'Animatable' in gallery_final and 'swipeOffset' in gallery_final and 'animateTo' in gallery_final,
