@@ -32,9 +32,36 @@ scanner = SCANNER.read_text(encoding="utf-8")
 if "import androidx.compose.foundation.layout.width" not in scanner:
     anchor = "import androidx.compose.foundation.layout.height\n"
     if anchor in scanner: scanner = scanner.replace(anchor, anchor + "import androidx.compose.foundation.layout.width\n", 1)
+if "import androidx.compose.material.icons.filled.MoreVert" not in scanner:
+    anchor = "import androidx.compose.material.icons.filled.Folder\n"
+    if anchor in scanner: scanner = scanner.replace(anchor, anchor + "import androidx.compose.material.icons.filled.MoreVert\n", 1)
 if "CameraSectionControls(" in scanner:
     start, end = balanced_call(scanner, "CameraSectionControls(", "scanner controls")
-    custom = '''// ScannerSectionControls: MORE | shutter | PAGES\n                Row(\n                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),\n                    horizontalArrangement = Arrangement.SpaceBetween,\n                    verticalAlignment = Alignment.CenterVertically\n                ) {\n                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { }) {\n                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {\n                            Icon(Icons.Default.MoreVert, "More", tint = ComposeColor.White)\n                        }\n                        Text("MORE", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)\n                    }\n                    Box(\n                        Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture),\n                        contentAlignment = Alignment.Center\n                    ) {\n                        Box(Modifier.size(58.dp).background(ComposeColor.White, CircleShape))\n                    }\n                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)) {\n                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {\n                            Icon(Icons.Default.Folder, "Pages", tint = ComposeColor.White)\n                        }\n                        Text("PAGES ${pages.size}", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)\n                    }\n                },'''
+    custom = '''// ScannerSectionControls: MORE | shutter | PAGES
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { }) {
+                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.MoreVert, "More", tint = ComposeColor.White)
+                        }
+                        Text("MORE", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                    Box(
+                        Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(Modifier.size(58.dp).background(ComposeColor.White, CircleShape))
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)) {
+                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.Folder, "Pages", tint = ComposeColor.White)
+                        }
+                        Text("PAGES ${pages.size}", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    }
+                }'''
     scanner = scanner[:start] + custom + scanner[end:]
 scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }\n', '')
 scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }\n', '')
@@ -66,18 +93,89 @@ if ".zIndex(10f)" not in gallery:
 state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
 if "val swipeOffset = remember" not in gallery:
     if state_marker not in gallery: raise SystemExit("gallery viewport state not found")
-    gallery = gallery.replace(state_marker, state_marker + '''\n                        val swipeOffset = remember { Animatable(0f) }\n                        val previousUri = if (currentIndex > 0) items[currentIndex - 1].uri else null\n                        val nextUri = if (currentIndex >= 0 && currentIndex < items.lastIndex) items[currentIndex + 1].uri else null\n                        var previousBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }\n                        var nextBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }\n                        LaunchedEffect(currentIndex, previousUri, nextUri) {\n                            previousBitmap = previousUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }\n                            nextBitmap = nextUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }\n                        }\n''', 1)
-old_gesture_start = '.pointerInput(uri, currentIndex) {\n                                    var dragX = 0f\n                                    detectTransformGestures { _, pan, zoom, _ ->'
+    gallery = gallery.replace(state_marker, state_marker + '''
+                        val swipeOffset = remember { Animatable(0f) }
+                        val previousUri = if (currentIndex > 0) items[currentIndex - 1].uri else null
+                        val nextUri = if (currentIndex >= 0 && currentIndex < items.lastIndex) items[currentIndex + 1].uri else null
+                        var previousBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }
+                        var nextBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }
+                        LaunchedEffect(currentIndex, previousUri, nextUri) {
+                            previousBitmap = previousUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }
+                            nextBitmap = nextUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }
+                        }
+''', 1)
+old_gesture_start = '.pointerInput(uri, currentIndex) {
+                                    var dragX = 0f
+                                    detectTransformGestures { _, pan, zoom, _ ->'
 if old_gesture_start in gallery:
-    old_gesture_end = '''                                    }\n                                },'''
+    old_gesture_end = '''                                    }
+                                },'''
     start = gallery.find(old_gesture_start); end = gallery.find(old_gesture_end, start)
     if end < 0: raise SystemExit("gallery basic gesture end not found")
     end += len(old_gesture_end)
-    new_gesture = '''.pointerInput(uri, currentIndex) {\n                                    detectTransformGestures { _, pan, zoom, _ ->\n                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)\n                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f\n                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f\n                                        photoZoom = newZoom\n                                        if (newZoom <= 1f) {\n                                            photoPanX = 0f\n                                            photoPanY = 0f\n                                            if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {\n                                                val maxOffset = viewportWidth.toFloat()\n                                                swipeOffset.snapTo((swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset))\n                                            }\n                                        } else {\n                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)\n                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)\n                                            swipeOffset.snapTo(0f)\n                                        }\n                                    }\n                                    val threshold = viewportWidth.toFloat() * 0.5f\n                                    val targetIndex = when {\n                                        swipeOffset.value <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1\n                                        swipeOffset.value >= threshold && currentIndex > 0 -> currentIndex - 1\n                                        else -> -1\n                                    }\n                                    if (targetIndex >= 0 && viewportWidth > 0) {\n                                        swipeOffset.animateTo(if (targetIndex > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))\n                                        onNavigate(targetIndex)\n                                        swipeOffset.snapTo(0f)\n                                    } else {\n                                        swipeOffset.animateTo(0f, tween(160))\n                                    }\n                                },'''
+    new_gesture = '''.pointerInput(uri, currentIndex) {
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
+                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
+                                        photoZoom = newZoom
+                                        if (newZoom <= 1f) {
+                                            photoPanX = 0f
+                                            photoPanY = 0f
+                                            if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                                val maxOffset = viewportWidth.toFloat()
+                                                launch { swipeOffset.snapTo((swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset)) }
+                                            }
+                                        } else {
+                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
+                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
+                                            launch { swipeOffset.snapTo(0f) }
+                                        }
+                                    }
+                                    val threshold = viewportWidth.toFloat() * 0.5f
+                                    val targetIndex = when {
+                                        swipeOffset.value <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                        swipeOffset.value >= threshold && currentIndex > 0 -> currentIndex - 1
+                                        else -> -1
+                                    }
+                                    if (targetIndex >= 0 && viewportWidth > 0) {
+                                        swipeOffset.animateTo(if (targetIndex > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
+                                        onNavigate(targetIndex)
+                                        swipeOffset.snapTo(0f)
+                                    } else {
+                                        swipeOffset.animateTo(0f, tween(160))
+                                    }
+                                },'''
     gallery = gallery[:start] + new_gesture + gallery[end:]
-single_image = '''Image(\n                                it.asImageBitmap(),\n                                "Photo",\n                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {\n                                    scaleX = photoZoom\n                                    scaleY = photoZoom\n                                    translationX = photoPanX\n                                    translationY = photoPanY\n                                },\n                                contentScale = ContentScale.Fit\n                            )'''
+single_image = '''Image(
+                                it.asImageBitmap(),
+                                "Photo",
+                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                                    scaleX = photoZoom
+                                    scaleY = photoZoom
+                                    translationX = photoPanX
+                                    translationY = photoPanY
+                                },
+                                contentScale = ContentScale.Fit
+                            )'''
 if single_image in gallery:
-    gallery = gallery.replace(single_image, '''previousBitmap?.let { previous ->\n                                Image(previous.asImageBitmap(), "Previous photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() }, contentScale = ContentScale.Fit)\n                            }\n                            Image(\n                                it.asImageBitmap(),\n                                "Photo",\n                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {\n                                    scaleX = photoZoom\n                                    scaleY = photoZoom\n                                    translationX = photoPanX + swipeOffset.value\n                                    translationY = photoPanY\n                                },\n                                contentScale = ContentScale.Fit\n                            )\n                            nextBitmap?.let { next ->\n                                Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)\n                            }''', 1)
+    gallery = gallery.replace(single_image, '''previousBitmap?.let { previous ->
+                                Image(previous.asImageBitmap(), "Previous photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
+                            }
+                            Image(
+                                it.asImageBitmap(),
+                                "Photo",
+                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                                    scaleX = photoZoom
+                                    scaleY = photoZoom
+                                    translationX = photoPanX + swipeOffset.value
+                                    translationY = photoPanY
+                                },
+                                contentScale = ContentScale.Fit
+                            )
+                            nextBitmap?.let { next ->
+                                Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
+                            }''', 1)
 checks = {
     "scanner pages": 'PAGES' in scanner and 'onFinish' in scanner,
     "scanner more": 'MORE' in scanner,
@@ -93,5 +191,5 @@ checks = {
 }
 for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
-if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
+if failed: raise SystemExit("FINAL UI AUDIT FAILED: "; ".join(failed))
 GALLERY.write_text(gallery, encoding="utf-8")
