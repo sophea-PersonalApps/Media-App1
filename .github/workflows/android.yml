@@ -17,9 +17,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Build from the known-good clean baseline, then apply deterministic
-      # source generators. This prevents stale generated Kotlin from being
-      # mistaken for the source of truth.
       - name: Restore GalleryActivity baseline
         shell: bash
         run: git checkout 41905f1 -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
@@ -80,6 +77,8 @@ jobs:
           qr = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt").read_text(encoding="utf-8")
           cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
           cap_end = scanner.find("\n@Composable", cap_start + 1)
+          if cap_start < 0 or cap_end < 0:
+              raise SystemExit("SOURCE AUDIT FAILED: ScannerCapture boundary not found")
           cap = scanner[cap_start:cap_end]
           checks = {
               "camera pinch": "detectTransformGestures(panZoomLock = true)" in main and "var gestureZoom = cameraZoom" in main,
@@ -88,7 +87,8 @@ jobs:
               "gallery drag animation": "animateTo(destination, tween(180))" in gallery,
               "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectTransformGestures" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
-              "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onFlip = onFinish" in cap,
+              "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap and "onFlip = onFlip" in cap,
+              "scanner pages action is shared flip control": "onFlip = onFlip" in cap,
               "scanner old control stack removed": 'Text("Finish")' not in cap and "LazyRow(" not in cap and 'Text("MORE"' not in cap,
               "scanner header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
               "qr header removed": 'Text("QR SCANNER", color = Color.White' not in qr,
