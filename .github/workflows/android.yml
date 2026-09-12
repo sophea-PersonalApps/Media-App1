@@ -51,6 +51,25 @@ jobs:
           set -euo pipefail
           python3 tools/fix_gallery_scanner_layout.py
 
+      - name: Fix generated scanner layout brace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
+          text = p.read_text(encoding="utf-8")
+          old = 'CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)\n            }\n        }\n    }\n}'
+          new = 'CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)\n        }\n    }\n}'
+          if old in text:
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+              print("Removed extra ScannerCapture closing brace.")
+          elif new in text:
+              print("ScannerCapture brace already fixed.")
+          else:
+              raise SystemExit("Could not locate ScannerCapture closing-brace sequence")
+          PY
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
