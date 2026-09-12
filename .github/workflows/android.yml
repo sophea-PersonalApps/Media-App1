@@ -3,7 +3,9 @@ name: Android Debug APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, 'fix/**' ]
+    branches:
+      - main
+      - 'fix/**'
 
 permissions:
   contents: write
@@ -18,29 +20,24 @@ jobs:
           fetch-depth: 0
 
       - name: Restore GalleryActivity baseline
-        shell: bash
         run: git checkout 41905f1 -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
 
       - name: Apply pinch zoom and gallery pan implementation
-        shell: bash
         run: |
           set -euo pipefail
           python3 tools/patch_pinch_zoom.py
 
       - name: Apply gallery video actions and album navigation
-        shell: bash
         run: |
           set -euo pipefail
           python3 tools/patch_gallery_ui.py
 
       - name: Apply requested gallery and scanner changes
-        shell: bash
         run: |
           set -euo pipefail
           python3 tools/patch_requested_ui.py
 
       - name: Apply final gallery pager and scanner layout
-        shell: bash
         run: |
           set -euo pipefail
           python3 tools/fix_gallery_scanner_layout.py
@@ -87,8 +84,9 @@ jobs:
               "gallery drag animation": "animateTo(destination, tween(180))" in gallery,
               "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectTransformGestures" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
-              "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap and "onFlip = onFlip" in cap,
-              "scanner pages action is shared flip control": "onFlip = onFlip" in cap,
+              "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.draw.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
+              "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap,
+              "scanner PAGES action": "onFlip = onFinish" in cap,
               "scanner old control stack removed": 'Text("Finish")' not in cap and "LazyRow(" not in cap and 'Text("MORE"' not in cap,
               "scanner header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
               "qr header removed": 'Text("QR SCANNER", color = Color.White' not in qr,
