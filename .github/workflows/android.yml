@@ -45,6 +45,12 @@ jobs:
           set -euo pipefail
           python3 tools/add_gallery_swipe_import.py
 
+      - name: Apply final gallery and scanner layout fixes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/fix_gallery_scanner_layout.py
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -70,8 +76,8 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only
-          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import)\.py|\.github/workflows/android\.yml)$' >/dev/null
-          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import)\.py|\.github/workflows/android\.yml)$' || true)
+          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' >/dev/null
+          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' || true)
           test -z "$unexpected"
 
       - name: Verify requested source changes
@@ -105,10 +111,15 @@ jobs:
               "gallery photo pan preserved": "translationX = photoPanX" in gallery and "translationY = photoPanY" in gallery,
               "gallery swipe import": "import androidx.compose.foundation.gestures.detectHorizontalDragGestures" in gallery,
               "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
-              "scanner shared bottom controls": "CameraSectionControls(" in scanner and "CameraSectionBottomNavigation(" in scanner,
+              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "CameraSectionControls(" in scanner,
+              "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner,
               "QR compact back button": "Modifier.align(Alignment.TopStart).statusBarsPadding()" in qr,
               "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
               "scanner/QR transition has no animation": "overridePendingTransition(0, 0)" in main and "overridePendingTransition(0, 0)" in scanner and "overridePendingTransition(0, 0)" in qr,
+              "gallery interactive swipe": "var swipeOffset by rememberSaveable(uri)" in gallery,
+              "gallery adjacent photo": "adjacentBitmap" in gallery,
+              "gallery half-width swipe commit": "val commitDistance = viewportWidth.toFloat() * 0.5f" in gallery,
+              "gallery video action row above media": ".zIndex(10f)" in gallery,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
@@ -149,6 +160,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Implement requested gallery swipe and scanner UI [skip ci]'
+            git commit -m 'Implement final gallery and scanner layout fixes [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
