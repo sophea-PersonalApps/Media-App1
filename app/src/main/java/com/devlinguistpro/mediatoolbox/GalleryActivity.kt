@@ -74,6 +74,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
@@ -272,7 +273,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                 )
             }
         }) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
                 Spacer(Modifier.weight(1f))
                 IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
@@ -298,8 +299,15 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                     bitmap?.let {
                         var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
                         var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+                        var swipeOffset by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+                        val adjacentIndex = when { swipeOffset < 0f -> currentIndex + 1; swipeOffset > 0f -> currentIndex - 1; else -> -1 }
+                        val adjacentUri = items.getOrNull(adjacentIndex)?.uri
+                        var adjacentBitmap by remember(adjacentUri) { mutableStateOf<Bitmap?>(null) }
                         var viewportWidth by remember(uri) { mutableIntStateOf(0) }
                         var viewportHeight by remember(uri) { mutableIntStateOf(0) }
+                        LaunchedEffect(adjacentUri) {
+                            adjacentBitmap = if (adjacentUri == null) null else withContext(Dispatchers.IO) { loadFullImage(context, adjacentUri) }
+                        }
                         Box(
                             Modifier
                                 .fillMaxSize()
@@ -319,8 +327,10 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                             photoPanY = 0f
                                             if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                                                 dragX += pan.x
-                                                if (dragX <= -80f && currentIndex < items.lastIndex) { onNavigate(currentIndex + 1); dragX = 0f }
-                                                else if (dragX >= 80f && currentIndex > 0) { onNavigate(currentIndex - 1); dragX = 0f }
+                                                swipeOffset = (swipeOffset + pan.x).coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
+                                                val commitDistance = viewportWidth.toFloat() * 0.5f
+                                                if (viewportWidth > 0 && swipeOffset <= -commitDistance && currentIndex < items.lastIndex) { onNavigate(currentIndex + 1); swipeOffset = 0f; dragX = 0f }
+                                                else if (viewportWidth > 0 && swipeOffset >= commitDistance && currentIndex > 0) { onNavigate(currentIndex - 1); swipeOffset = 0f; dragX = 0f }
                                             }
                                         } else {
                                             dragX = 0f
@@ -331,13 +341,23 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                 },
                             contentAlignment = Alignment.Center
                         ) {
+                            if (photoZoom <= 1f && swipeOffset != 0f && adjacentBitmap != null) {
+                                Image(
+                                    adjacentBitmap!!.asImageBitmap(),
+                                    "Next photo",
+                                    Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                                        translationX = swipeOffset + if (swipeOffset < 0f) viewportWidth.toFloat() else -viewportWidth.toFloat()
+                                    },
+                                    contentScale = ContentScale.Fit
+                                )
+                            }
                             Image(
                                 it.asImageBitmap(),
                                 "Photo",
                                 Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
                                     scaleX = photoZoom
                                     scaleY = photoZoom
-                                    translationX = photoPanX
+                                    translationX = if (photoZoom <= 1f) photoPanX + swipeOffset else photoPanX
                                     translationY = photoPanY
                                 },
                                 contentScale = ContentScale.Fit

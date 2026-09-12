@@ -399,8 +399,15 @@ private fun ScannerCapture(
     Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {
         AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
         ScannerPageGuide(detectedQuad)
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(ComposeColor.Black.copy(alpha = 0.82f))
+                .navigationBarsPadding()
+                .padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
                 if (pages.isNotEmpty()) {
                     LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         itemsIndexed(pages) { index, path ->
@@ -424,7 +431,6 @@ private fun ScannerCapture(
                     primaryEnabled = true
                 )
                 CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
-            }
         }
     }
 }
