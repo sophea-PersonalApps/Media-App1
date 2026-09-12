@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOT = Path("app/src/main/java/com/devlinguistpro/mediatoolbox")
 GALLERY = ROOT / "GalleryActivity.kt"
@@ -7,93 +6,75 @@ SCANNER = ROOT / "ScannerActivity.kt"
 MAIN = ROOT / "MainActivity.kt"
 QR = ROOT / "QrScannerActivity.kt"
 
-def balanced_call(text, marker, label):
-    start = text.find(marker)
-    if start < 0: raise SystemExit(f"{label}: marker not found")
-    open_pos = text.find("(", start); depth = 0
-    for i in range(open_pos, len(text)):
-        if text[i] == "(": depth += 1
-        elif text[i] == ")":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                while end < len(text) and text[end] in " \t\n": end += 1
-                if end < len(text) and text[end] == ",": end += 1
-                return start, end
-    raise SystemExit(f"{label}: unmatched parentheses")
-
 def replace_once(text, old, new, label):
     n = text.count(old)
     if n == 1: return text.replace(old, new, 1)
     if n == 0 and new in text: return text
     raise SystemExit(f"{label}: expected 1 match, found {n}")
 
+# Scanner must use the exact same shared camera chrome as Camera/Video. The only
+# mode-specific difference is that CameraSectionControls itself renders PAGES in
+# the right-hand action position when mode == SCAN. Remove the scanner's old
+# duplicate page-count/shutter/finish row so it cannot shrink the camera preview.
 scanner = SCANNER.read_text(encoding="utf-8")
-if "import androidx.compose.foundation.layout.width" not in scanner:
-    anchor = "import androidx.compose.foundation.layout.height\n"
-    if anchor in scanner: scanner = scanner.replace(anchor, anchor + "import androidx.compose.foundation.layout.width\n", 1)
-if "import androidx.compose.material.icons.filled.MoreVert" not in scanner:
-    anchor = "import androidx.compose.material.icons.filled.Folder\n"
-    if anchor in scanner: scanner = scanner.replace(anchor, anchor + "import androidx.compose.material.icons.filled.MoreVert\n", 1)
-if "CameraSectionControls(" in scanner:
-    start, end = balanced_call(scanner, "CameraSectionControls(", "scanner controls")
-    custom = '''// ScannerSectionControls: MORE | shutter | PAGES
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { }) {
-                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.MoreVert, "More", tint = ComposeColor.White)
+old_duplicate = '''            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                if (pages.isNotEmpty()) {
+                    LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        itemsIndexed(pages) { index, path ->
+                            Box(Modifier.size(68.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) { Icon(Icons.Default.Delete, "Remove page", tint = ComposeColor.White) } }
                         }
-                        Text("MORE", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
-                    Box(
-                        Modifier.size(72.dp)
-                            .background(ComposeColor.White, CircleShape)
-                            .padding(5.dp)
-                            .clickable(onClick = onCapture),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(Modifier.size(58.dp).background(ComposeColor.White, CircleShape))
-                    }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)
-                    ) {
-                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Folder, "Pages", tint = ComposeColor.White)
-                        }
-                        Text("PAGES ${pages.size}", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    }
-                }'''
-    scanner = scanner[:start] + custom + scanner[end:]
-scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }\n', '')
-scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }\n', '')
-scanner = scanner.replace('IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }\n', '')
-for old, new in [("android.R.anim.slide_in_right", "R.anim.slide_in_right"), ("android.R.anim.slide_out_left", "R.anim.slide_out_left"), ("android.R.anim.slide_in_left", "R.anim.slide_in_left"), ("android.R.anim.slide_out_right", "R.anim.slide_out_right")]: scanner = scanner.replace(old, new)
-scanner = scanner.replace("overridePendingTransition(0, 0)", "overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)")
+                    Spacer(Modifier.height(8.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
+                    Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.White, modifier = Modifier.padding(end = 18.dp))
+                    Box(Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) { Box(Modifier.size(58.dp).background(ComposeColor.Black, CircleShape)) }
+                    Spacer(Modifier.size(18.dp)); Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
+                }
+                Spacer(Modifier.height(8.dp))
+                CameraSectionControls(
+                    mode = CameraSectionMode.SCAN,
+                    onModeSelected = { scannerModeAction(context, it) },
+                    onPrimaryAction = onCapture,
+                    onFlip = onFlip,
+                    onMore = { },
+                    primaryEnabled = true
+                )
+                CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+            }
+'''
+new_shared = '''            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding()) {
+                CameraSectionControls(
+                    mode = CameraSectionMode.SCAN,
+                    onModeSelected = { scannerModeAction(context, it) },
+                    onPrimaryAction = onCapture,
+                    onFlip = onFinish,
+                    onMore = { },
+                    primaryEnabled = true
+                )
+                CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+            }
+'''
+scanner = replace_once(scanner, old_duplicate, new_shared, "scanner duplicate capture controls")
+# Remove the capture-screen top header if it survived an earlier patch.
+scanner = scanner.replace('''            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }
+                Text("Scanner", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
+                IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }
+            }
+''', '')
 SCANNER.write_text(scanner, encoding="utf-8")
 
-main = MAIN.read_text(encoding="utf-8")
-for old, new in [("android.R.anim.slide_in_right", "R.anim.slide_in_right"), ("android.R.anim.slide_out_left", "R.anim.slide_out_left"), ("android.R.anim.slide_in_left", "R.anim.slide_in_left"), ("android.R.anim.slide_out_right", "R.anim.slide_out_right")]: main = main.replace(old, new)
-main = main.replace("overridePendingTransition(0, 0)", "overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)")
-MAIN.write_text(main, encoding="utf-8")
-
-qr = QR.read_text(encoding="utf-8")
-qr = qr.replace('IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }\n', '')
-for old, new in [("android.R.anim.slide_in_right", "R.anim.slide_in_right"), ("android.R.anim.slide_out_left", "R.anim.slide_out_left"), ("android.R.anim.slide_in_left", "R.anim.slide_in_left"), ("android.R.anim.slide_out_right", "R.anim.slide_out_right")]: qr = qr.replace(old, new)
-qr = qr.replace("overridePendingTransition(0, 0)", "overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)")
-QR.write_text(qr, encoding="utf-8")
-
+# Keep the existing successful gallery pager implementation, but make its gesture
+# semantics explicit: at zoom 1 a horizontal drag is a page gesture; release can
+# only return to the current page or complete exactly one adjacent-page move.
 gallery = GALLERY.read_text(encoding="utf-8")
 if "import androidx.compose.ui.zIndex" not in gallery:
     gallery = replace_once(gallery, "import androidx.compose.ui.viewinterop.AndroidView\n", "import androidx.compose.ui.viewinterop.AndroidView\nimport androidx.compose.ui.zIndex\n", "gallery zIndex import")
 if "import androidx.compose.animation.core.Animatable" not in gallery:
     anchor = "import androidx.compose.foundation.gestures.detectTransformGestures\n"
-    if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\n", 1)
-    else: gallery = gallery.replace("import androidx.compose.foundation", "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\nimport androidx.compose.foundation", 1)
+    if anchor in gallery:
+        gallery = gallery.replace(anchor, anchor + "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\n", 1)
 if "import androidx.compose.runtime.rememberCoroutineScope" not in gallery:
     anchor = "import androidx.compose.runtime.rememberSaveable\n"
     if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import androidx.compose.runtime.rememberCoroutineScope\n", 1)
@@ -102,6 +83,8 @@ if "import kotlinx.coroutines.launch" not in gallery:
     if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import kotlinx.coroutines.launch\n", 1)
 if ".zIndex(10f)" not in gallery:
     gallery = replace_once(gallery, "Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {", "Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {", "gallery action row")
+# The pager state is generated here only if the earlier UI patch did not already
+# provide it. Do not duplicate an existing implementation.
 state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
 if "val swipeOffset = remember" not in gallery:
     if state_marker not in gallery: raise SystemExit("gallery viewport state not found")
@@ -124,7 +107,7 @@ if old_gesture_start in gallery:
     old_gesture_end = '''                                    }
                                 },'''
     start = gallery.find(old_gesture_start); end = gallery.find(old_gesture_end, start)
-    if end < 0: raise SystemExit("gallery basic gesture end not found")
+    if end < 0: raise SystemExit("gallery gesture end not found")
     end += len(old_gesture_end)
     new_gesture = '''.pointerInput(uri, currentIndex) {
                                     detectTransformGestures { _, pan, zoom, _ ->
@@ -189,10 +172,11 @@ if single_image in gallery:
                             nextBitmap?.let { next ->
                                 Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
                             }''', 1)
+
+# Keep the audit aligned with the actual shared-controls implementation.
 checks = {
-    "scanner pages": 'PAGES' in scanner and 'onFinish' in scanner,
-    "scanner more": 'MORE' in scanner,
-    "scanner shutter": 'onCapture' in scanner,
+    "scanner shared controls": "CameraSectionControls(" in scanner and "CameraSectionBottomNavigation(" in scanner and 'mode = CameraSectionMode.SCAN' in scanner and 'onFlip = onFinish' in scanner,
+    "scanner duplicate row removed": 'Text("Finish")' not in scanner and 'Text("${pages.size} page' not in scanner,
     "scanner top back removed": 'Back to scanner' not in scanner,
     "gallery interactive swipe": 'swipeOffset' in gallery and 'Animatable' in gallery and 'snapTo' in gallery,
     "gallery adjacent photos": 'previousBitmap' in gallery and 'nextBitmap' in gallery,
