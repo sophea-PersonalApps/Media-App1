@@ -27,9 +27,13 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
-        // Warm the two destinations before the user asks for them.
+        // Pre-decode the two destinations so a normal adjacent swipe can display immediately.
         listOfNotNull(previousItem, nextItem).forEach { item ->
-            withContext(Dispatchers.IO) { loadFullImage(context, item.uri) }
+            if (!item.isVideo && ThumbnailMemoryCache.getFull(item.uri) == null) {
+                withContext(Dispatchers.IO) {
+                    loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
+                }
+            }
         }
     }
 
@@ -108,11 +112,7 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                         }
                     }
                 ) {
-                    if (isVideo) {
-                        VideoPlayer(uri, videoSpeed)
-                    } else {
-                        CachedFullImage(uri, context, photoPanX, photoPanY)
-                    }
+                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context, photoPanX, photoPanY)
                 }
                 if (nextItem != null) {
                     AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
@@ -126,7 +126,10 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 @Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
     var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri)) }
     LaunchedEffect(uri) {
-        if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
+            bitmap?.let { ThumbnailMemoryCache.putFull(uri, it) }
+        }
     }
     bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
         ?: CircularProgressIndicator(color = Color.White)
@@ -144,5 +147,24 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 
 '''
 text = text[:start] + new_viewer + text[end:]
+# Add a separate full-image cache to the existing thumbnail cache. Full images are capped by LruCache.
+old_cache = '''private object ThumbnailMemoryCache {
+    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+    private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
+    fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
+    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+}'''
+new_cache = '''private object ThumbnailMemoryCache {
+    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+    private const val FULL_PREFIX = "full|"
+    private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
+    fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
+    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+    fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
+    fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
+}'''
+if old_cache not in text:
+    raise SystemExit("ThumbnailMemoryCache block not found")
+text = text.replace(old_cache, new_cache, 1)
 path.write_text(text, encoding="utf-8")
-print("Replaced MediaViewer with preloaded full-image neighbors and cached current photos.")
+print("Replaced MediaViewer with preloaded full-image neighbors and a bounded full-image cache.")
