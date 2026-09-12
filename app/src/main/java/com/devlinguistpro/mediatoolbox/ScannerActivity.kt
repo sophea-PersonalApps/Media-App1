@@ -396,16 +396,18 @@ private fun ScannerCapture(
     onFinish: () -> Unit, onBack: () -> Unit, onFlip: () -> Unit, onOpenCamera: () -> Unit, onOpenVideo: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit
 ) {
     val context = LocalContext.current
-    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {
-        AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
-        ScannerPageGuide(detectedQuad)
-        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Column(
-            Modifier
-                .fillMaxWidth()
-                .background(ComposeColor.Black.copy(alpha = 0.82f))
-                .navigationBarsPadding()
-        ) {
+Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                AndroidView(
+                    factory = { PreviewView(context).apply {
+                        scaleType = PreviewView.ScaleType.FIT_CENTER
+                        implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                        onPreviewReady(this)
+                    } },
+                    modifier = Modifier.fillMaxSize()
+                )
+                ScannerPageGuide(detectedQuad)
+            }
             CameraSectionControls(
                 mode = CameraSectionMode.SCAN,
                 onModeSelected = { scannerModeAction(context, it) },
@@ -420,8 +422,6 @@ private fun ScannerCapture(
                 onGallery = onOpenGallery
             )
         }
-        }
-    }
 }
 
 @Composable

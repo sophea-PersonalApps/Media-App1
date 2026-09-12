@@ -90,9 +90,12 @@ private data class Album(val id: String, val name: String, val count: Int, val c
 
 private object ThumbnailMemoryCache {
     private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
+    private const val FULL_PREFIX = "full|"
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
     fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
     fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+    fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
+    fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
 }
 
 class GalleryActivity : ComponentActivity() {
@@ -276,6 +279,14 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
+        // Pre-decode the two destinations so a normal adjacent swipe can display immediately.
+        listOfNotNull(previousItem, nextItem).forEach { item ->
+            if (!item.isVideo && ThumbnailMemoryCache.getFull(item.uri) == null) {
+                withContext(Dispatchers.IO) {
+                    loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
+                }
+            }
+        }
     }
 
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
@@ -353,13 +364,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                         }
                     }
                 ) {
-                    if (isVideo) {
-                        VideoPlayer(uri, videoSpeed)
-                    } else {
-                        var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-                        LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
-                        bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = photoPanX; translationY = photoPanY }, contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(color = Color.White)
-                    }
+                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context, photoPanX, photoPanY)
                 }
                 if (nextItem != null) {
                     AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
@@ -368,6 +373,18 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
         }
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
     }
+}
+
+@Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri)) }
+    LaunchedEffect(uri) {
+        if (bitmap == null) {
+            bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
+            bitmap?.let { ThumbnailMemoryCache.putFull(uri, it) }
+        }
+    }
+    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
+        ?: CircularProgressIndicator(color = Color.White)
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
