@@ -10,36 +10,14 @@ if import_line not in text:
     text = text.replace(marker, marker + import_line, 1)
     path.write_text(text, encoding="utf-8")
 
-scanner_path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
-scanner = scanner_path.read_text(encoding="utf-8")
-old_nav = "CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)"
-new_nav = '''/* CameraSectionBottomNavigation( replacement: keep the shared CAMERA/GALLERY behavior inline. */
-                Row(
-                    Modifier.fillMaxWidth().background(ComposeColor.Black).height(58.dp).navigationBarsPadding(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "CAMERA",
-                        color = ComposeColor.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable(onClick = onOpenCamera).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                    Text(
-                        "GALLERY",
-                        color = ComposeColor.White.copy(alpha = 0.55f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        modifier = Modifier.clickable(onClick = onOpenGallery).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }'''
-count = scanner.count(old_nav)
-if count == 2:
-    scanner = scanner.replace(old_nav, new_nav)
-    scanner_path.write_text(scanner, encoding="utf-8")
-    print("Replaced both scanner bottom-navigation calls with inline CAMERA/GALLERY navigation.")
-elif count == 0:
-    print("Scanner bottom navigation already replaced.")
+# The final layout script runs immediately after this step. Inject the last-mile behavioural
+# finalizers there so the generated source is corrected after all earlier structural patches.
+finalizer = Path("tools/fix_gallery_scanner_layout.py")
+final_text = finalizer.read_text(encoding="utf-8")
+marker = "# LAST_MILE_FINALIZERS\n"
+if marker not in final_text:
+    final_text += "\n" + marker + "exec(Path(\"tools/finalize_gallery_pager.py\").read_text(encoding=\"utf-8\"), globals())\nexec(Path(\"tools/finalize_scanner_layout.py\").read_text(encoding=\"utf-8\"), globals())\n"
+    finalizer.write_text(final_text, encoding="utf-8")
+    print("Injected last-mile gallery/scanner finalizers into the final patch step.")
 else:
-    raise SystemExit(f"ScannerActivity.kt: expected 2 bottom-navigation calls, found {count}")
+    print("Last-mile finalizers already injected.")
