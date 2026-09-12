@@ -64,15 +64,13 @@ MAIN.write_text(main.replace('overridePendingTransition(0, 0)', 'overridePending
 qr = QR.read_text(encoding="utf-8")
 QR.write_text(qr.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)'), encoding="utf-8")
 
-# Gallery pager owns MediaViewer. Its generated imports are explicit because
-# the pager uses APIs that are not guaranteed by wildcard/transitive imports.
 gallery = GALLERY.read_text(encoding="utf-8")
 imports = [
     'import androidx.compose.animation.core.Animatable',
     'import androidx.compose.animation.core.tween',
     'import androidx.compose.foundation.gestures.detectHorizontalDragGestures',
     'import androidx.compose.foundation.gestures.detectTransformGestures',
-    'import androidx.compose.ui.draw.zIndex',
+    'import androidx.compose.ui.zIndex',
     'import androidx.compose.ui.layout.onSizeChanged',
     'import kotlinx.coroutines.launch',
 ]
@@ -84,7 +82,6 @@ GALLERY.write_text(gallery, encoding="utf-8")
 
 exec(Path("tools/fix_gallery_pager.py").read_text(encoding="utf-8"), globals())
 
-# fix_gallery_pager rewrites MediaViewer/imports, so enforce the imports again.
 gallery = GALLERY.read_text(encoding="utf-8")
 for imp in imports:
     if imp not in gallery:
@@ -106,7 +103,7 @@ checks = {
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
     "gallery animation imports": 'import androidx.compose.animation.core.Animatable' in gallery_final and 'import androidx.compose.animation.core.tween' in gallery_final,
     "gallery gesture imports": 'import androidx.compose.foundation.gestures.detectHorizontalDragGestures' in gallery_final and 'import androidx.compose.foundation.gestures.detectTransformGestures' in gallery_final,
-    "gallery zIndex import": 'import androidx.compose.ui.draw.zIndex' in gallery_final,
+    "gallery zIndex import": 'import androidx.compose.ui.zIndex' in gallery_final,
     "gallery coroutine import": 'import kotlinx.coroutines.launch' in gallery_final,
     "gallery interactive pager": 'Animatable' in gallery_final and 'swipeOffset' in gallery_final and 'animateTo' in gallery_final,
     "gallery adjacent media": 'AdjacentMedia(' in gallery_final and 'previousItem' in gallery_final and 'nextItem' in gallery_final,
