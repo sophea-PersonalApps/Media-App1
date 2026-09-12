@@ -108,9 +108,9 @@ if "val swipeOffset = remember" not in gallery:
                             nextBitmap = nextUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }
                         }
 ''', 1)
-old_gesture_start = '.pointerInput(uri, currentIndex) {
+old_gesture_start = '''.pointerInput(uri, currentIndex) {
                                     var dragX = 0f
-                                    detectTransformGestures { _, pan, zoom, _ ->'
+                                    detectTransformGestures { _, pan, zoom, _ ->'''
 if old_gesture_start in gallery:
     old_gesture_end = '''                                    }
                                 },'''
