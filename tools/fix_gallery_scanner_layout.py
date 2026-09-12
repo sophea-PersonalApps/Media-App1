@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ROOT = Path("app/src/main/java/com/devlinguistpro/mediatoolbox")
 GALLERY = ROOT / "GalleryActivity.kt"
@@ -31,8 +32,7 @@ def replace_once(text, old, new, label):
     if n == 0 and new in text: return text
     raise SystemExit(f"{label}: expected 1 match, found {n}")
 
-# Scanner: the generated baseline has CameraSectionControls(SCAN). Replace
-# that whole call with the exact requested scanner controls: MORE | shutter | PAGES.
+# Scanner: exact requested bottom controls: MORE | shutter | PAGES.
 scanner = SCANNER.read_text(encoding="utf-8")
 if "import androidx.compose.foundation.layout.width" not in scanner:
     anchor = "import androidx.compose.foundation.layout.height\n"
@@ -65,11 +65,9 @@ if "CameraSectionControls(" in scanner:
                     }
                 },'''
     scanner = scanner[:start] + custom + scanner[end:]
-# Remove any remaining capture-screen back/flip controls.
 scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }\n', '')
 scanner = scanner.replace('IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }\n', '')
 scanner = scanner.replace('IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }\n', '')
-# Forward navigation from scanner to camera/video/gallery/QR uses the same slide-in-right direction.
 for old, new in [("android.R.anim.slide_in_right", "R.anim.slide_in_right"), ("android.R.anim.slide_out_left", "R.anim.slide_out_left"), ("android.R.anim.slide_in_left", "R.anim.slide_in_left"), ("android.R.anim.slide_out_right", "R.anim.slide_out_right")]: scanner = scanner.replace(old, new)
 scanner = scanner.replace("overridePendingTransition(0, 0)", "overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)")
 SCANNER.write_text(scanner, encoding="utf-8")
@@ -85,25 +83,62 @@ for old, new in [("android.R.anim.slide_in_right", "R.anim.slide_in_right"), ("a
 qr = qr.replace("overridePendingTransition(0, 0)", "overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)")
 QR.write_text(qr, encoding="utf-8")
 
-# Gallery: keep the proven continuous adjacent-image implementation from the
-# preceding patch. Only add missing z-order/animation imports or state if needed.
+# Gallery: the previous patch intentionally adds only basic swipe navigation.
+# Here we replace that with a true interactive pager: the adjacent image is
+# visible under the finger, follows the drag proportionally, and then either
+# commits smoothly or springs back. Zoomed photos retain independent panning.
 gallery = GALLERY.read_text(encoding="utf-8")
 if "import androidx.compose.ui.zIndex" not in gallery:
     gallery = replace_once(gallery, "import androidx.compose.ui.viewinterop.AndroidView\n", "import androidx.compose.ui.viewinterop.AndroidView\nimport androidx.compose.ui.zIndex\n", "gallery zIndex import")
+if "import androidx.compose.animation.core.Animatable" not in gallery:
+    anchor = "import androidx.compose.foundation.gestures.detectTransformGestures\n"
+    if anchor in gallery:
+        gallery = gallery.replace(anchor, anchor + "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\n", 1)
+    else:
+        gallery = gallery.replace("import androidx.compose.foundation", "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\nimport androidx.compose.foundation", 1)
+
+# The action row must remain above the media surface.
 if ".zIndex(10f)" not in gallery:
     gallery = replace_once(gallery, "Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {", "Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {", "gallery action row")
 
-# The generated gallery must already contain the continuous swipe state after
-# patch_requested_ui/add_gallery_swipe_import. Do not silently accept a partial
-# implementation: audit the exact behaviour before Gradle.
+# Add continuous swipe state beside the existing photo pan state.
+state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
+if "val swipeOffset = remember" not in gallery:
+    if state_marker not in gallery:
+        raise SystemExit("gallery viewport state not found")
+    gallery = gallery.replace(state_marker, state_marker + '''\n                        val swipeOffset = remember { Animatable(0f) }\n                        val previousUri = if (currentIndex > 0) items[currentIndex - 1].uri else null\n                        val nextUri = if (currentIndex >= 0 && currentIndex < items.lastIndex) items[currentIndex + 1].uri else null\n                        var previousBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }\n                        var nextBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }\n                        LaunchedEffect(currentIndex, previousUri, nextUri) {\n                            previousBitmap = previousUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }\n                            nextBitmap = nextUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }\n                        }\n''', 1)
+
+# Replace the basic photo gesture with a continuous drag. detectTransformGestures
+# returns only after the gesture ends, so the code immediately after it is the
+# release/commit animation. During the gesture swipeOffset is updated every pan.
+old_gesture_start = '.pointerInput(uri, currentIndex) {\n                                    var dragX = 0f\n                                    detectTransformGestures { _, pan, zoom, _ ->'
+if old_gesture_start in gallery:
+    old_gesture_end = '''                                    }\n                                },'''
+    start = gallery.find(old_gesture_start)
+    end = gallery.find(old_gesture_end, start)
+    if end < 0:
+        raise SystemExit("gallery basic gesture end not found")
+    end += len(old_gesture_end)
+    new_gesture = '''.pointerInput(uri, currentIndex) {\n                                    detectTransformGestures { _, pan, zoom, _ ->\n                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)\n                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f\n                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f\n                                        photoZoom = newZoom\n                                        if (newZoom <= 1f) {\n                                            photoPanX = 0f\n                                            photoPanY = 0f\n                                            if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {\n                                                val maxOffset = viewportWidth.toFloat()\n                                                val bounded = (swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset)\n                                                swipeOffset.snapTo(bounded)\n                                            }\n                                        } else {\n                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)\n                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)\n                                            swipeOffset.snapTo(0f)\n                                        }\n                                    }\n                                    val threshold = viewportWidth.toFloat() * 0.5f\n                                    val targetIndex = when {\n                                        swipeOffset.value <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1\n                                        swipeOffset.value >= threshold && currentIndex > 0 -> currentIndex - 1\n                                        else -> -1\n                                    }\n                                    if (targetIndex >= 0 && viewportWidth > 0) {\n                                        swipeOffset.animateTo(if (targetIndex > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))\n                                        onNavigate(targetIndex)\n                                        swipeOffset.snapTo(0f)\n                                    } else {\n                                        swipeOffset.animateTo(0f, tween(160))\n                                    }\n                                },'''
+    gallery = gallery[:start] + new_gesture + gallery[end:]
+
+# Replace the single photo Image with a three-slot horizontal pager. The current
+# image and its adjacent neighbour share the same swipeOffset, so half a drag
+# exposes exactly half of the next/previous image.
+single_image = '''Image(\n                                it.asImageBitmap(),\n                                "Photo",\n                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {\n                                    scaleX = photoZoom\n                                    scaleY = photoZoom\n                                    translationX = photoPanX\n                                    translationY = photoPanY\n                                },\n                                contentScale = ContentScale.Fit\n                            )'''
+if single_image in gallery:
+    replacement = '''previousBitmap?.let { previous ->\n                                Image(previous.asImageBitmap(), "Previous photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() }, contentScale = ContentScale.Fit)\n                            }\n                            Image(\n                                it.asImageBitmap(),\n                                "Photo",\n                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {\n                                    scaleX = photoZoom\n                                    scaleY = photoZoom\n                                    translationX = photoPanX + swipeOffset.value\n                                    translationY = photoPanY\n                                },\n                                contentScale = ContentScale.Fit\n                            )\n                            nextBitmap?.let { next ->\n                                Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)\n                            }'''
+    gallery = gallery.replace(single_image, replacement, 1)
+
+# Ensure the final source contains the implementation we intend to compile.
 checks = {
     "scanner pages": 'PAGES' in scanner and 'onFinish' in scanner,
     "scanner more": 'MORE' in scanner,
     "scanner shutter": 'onCapture' in scanner,
     "scanner top back removed": 'Back to scanner' not in scanner,
-    "gallery interactive swipe": 'swipeOffset' in gallery and 'Animatable' in gallery,
+    "gallery interactive swipe": 'swipeOffset' in gallery and 'Animatable' in gallery and 'snapTo' in gallery,
     "gallery adjacent photos": 'previousBitmap' in gallery and 'nextBitmap' in gallery,
-    "gallery smooth commit": 'tween(180)' in gallery,
+    "gallery smooth commit": 'tween(180)' in gallery and 'animateTo' in gallery,
     "gallery action row above media": '.zIndex(10f)' in gallery,
     "main forward slide": 'R.anim.slide_in_right' in main and 'R.anim.slide_out_left' in main,
     "qr reverse slide": 'R.anim.slide_in_left' in qr and 'R.anim.slide_out_right' in qr,
