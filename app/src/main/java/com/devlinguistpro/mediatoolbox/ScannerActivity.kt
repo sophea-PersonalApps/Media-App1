@@ -155,10 +155,10 @@ class ScannerActivity : ComponentActivity() {
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
                     onSave = ::savePdf,
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
-                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
+                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(0, 0) }
                 )
             }
         }
@@ -400,11 +400,6 @@ private fun ScannerCapture(
         AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
         ScannerPageGuide(detectedQuad)
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }
-                Text("Scanner", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }
-            }
             Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (pages.isNotEmpty()) {
                     LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {

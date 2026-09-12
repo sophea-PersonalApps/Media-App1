@@ -99,10 +99,10 @@ class QrScannerActivity : ComponentActivity() {
                     onScanAgain = { resultLocked.set(false); result = null },
                     onCopy = { copyResult(result) },
                     onOpen = { openResult(result) },
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
-                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
+                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(0, 0) }
                 )
             }
         }
@@ -199,11 +199,7 @@ private fun QrScannerScreen(
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
                 QrFinderOverlay()
-                Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                    Text("QR SCANNER", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-                    IconButton(onClick = onFlip, enabled = result == null) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }
-                }
+                IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
                 if (result == null) {
                     Column(Modifier.align(Alignment.BottomCenter)) {
                         CameraSectionControls(mode = CameraSectionMode.QR, onModeSelected = {
