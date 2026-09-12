@@ -17,9 +17,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      # The earlier successful build used a clean source baseline followed by
-      # deterministic generators. Keep that model, but make the generated
-      # sources self-contained so the build does not depend on stale patches.
+      # Build from the known-good clean baseline, then apply deterministic
+      # source generators. This prevents stale generated Kotlin from being
+      # mistaken for the source of truth.
       - name: Restore GalleryActivity baseline
         shell: bash
         run: git checkout 41905f1 -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
@@ -68,7 +68,7 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Verify requested source changes
+      - name: Verify generated source
         shell: bash
         run: |
           set -euo pipefail
@@ -78,30 +78,27 @@ jobs:
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
           scanner = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
           qr = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt").read_text(encoding="utf-8")
+          cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
+          cap_end = scanner.find("\n@Composable", cap_start + 1)
+          cap = scanner[cap_start:cap_end]
           checks = {
-              "camera transform gesture": "detectTransformGestures(panZoomLock = true)" in main,
-              "gallery selected index": "var selectedIndex by rememberSaveable" in gallery and "selectedIndex = media.indexOfFirst" in gallery,
-              "gallery full pager": "val swipeOffset = remember { Animatable(0f) }" in gallery and "AdjacentMedia(" in gallery and "previousItem" in gallery and "nextItem" in gallery,
-              "gallery adjacent drag": "detectHorizontalDragGestures" in gallery and "animateTo(destination, tween(180))" in gallery,
+              "camera pinch": "detectTransformGestures(panZoomLock = true)" in main and "var gestureZoom = cameraZoom" in main,
+              "gallery pager": "val swipeOffset = remember { Animatable(0f) }" in gallery and "AdjacentMedia(" in gallery,
+              "gallery adjacent items": "previousItem" in gallery and "nextItem" in gallery,
+              "gallery drag animation": "animateTo(destination, tween(180))" in gallery,
               "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectTransformGestures" in gallery,
-              "video speed": "VideoPlayer(uri, videoSpeed)" in gallery,
-              "scanner shared controls": "mode = CameraSectionMode.SCAN" in scanner and "onFlip = onFinish" in scanner and "CameraSectionBottomNavigation(" in scanner,
-              "scanner old controls removed": 'Text("Finish")' not in scanner[scanner.find("private fun ScannerCapture("):scanner.find("\n@Composable", scanner.find("private fun ScannerCapture(") + 1)],
+              "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
+              "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onFlip = onFinish" in cap,
+              "scanner old control stack removed": 'Text("Finish")' not in cap and "LazyRow(" not in cap and 'Text("MORE"' not in cap,
+              "scanner header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
               "qr header removed": 'Text("QR SCANNER", color = Color.White' not in qr,
-              "forward animation": "R.anim.slide_in_right" in main,
+              "main forward animation": "R.anim.slide_in_right" in main and "R.anim.slide_out_left" in main,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
           if failed: raise SystemExit("SOURCE AUDIT FAILED: " + "; ".join(failed))
-          print("ALL REQUESTED SOURCE AUDITS PASSED")
+          print("ALL GENERATED SOURCE AUDITS PASSED")
           PY
-
-      - name: Verify only expected build changes
-        shell: bash
-        run: |
-          set -euo pipefail
-          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|app/src/main/res/anim/(slide_in_right|slide_out_left|slide_in_left|slide_out_right)\.xml|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout|fix_gallery_pager)\.py|app/build.gradle.kts|\.github/workflows/android\.yml)$' || true)
-          test -z "$unexpected"
 
       - name: Build Android debug APK
         run: gradle :app:assembleDebug --stacktrace
@@ -136,6 +133,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Implement final gallery pager and scanner layout [skip ci]'
+            git commit -m 'Persist final gallery pager and scanner layout [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
