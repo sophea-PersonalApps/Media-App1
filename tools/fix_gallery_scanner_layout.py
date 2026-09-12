@@ -9,8 +9,7 @@ GALLERY = ROOT / "GalleryActivity.kt"
 
 def balanced_block(text, start):
     op = text.find("{", start)
-    if op < 0:
-        raise SystemExit("Could not find opening brace")
+    if op < 0: raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
         if text[i] == "{": depth += 1
@@ -29,13 +28,18 @@ if page_marker < 0: raise SystemExit("Scanner page-count control not found")
 column_start = cap.rfind("Column(", 0, page_marker)
 if column_start < 0: raise SystemExit("Scanner bottom control Column not found")
 a, e = balanced_block(cap, column_start)
-replacement = '''Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(ComposeColor.Black.copy(alpha = 0.82f))
-                .navigationBarsPadding()
-        ) {
+replacement = '''Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                AndroidView(
+                    factory = { PreviewView(context).apply {
+                        scaleType = PreviewView.ScaleType.FIT_CENTER
+                        implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                        onPreviewReady(this)
+                    } },
+                    modifier = Modifier.fillMaxSize()
+                )
+                ScannerPageGuide(detectedQuad)
+            }
             CameraSectionControls(
                 mode = CameraSectionMode.SCAN,
                 onModeSelected = { scannerModeAction(context, it) },
@@ -50,7 +54,11 @@ replacement = '''Column(
                 onGallery = onOpenGallery
             )
         }'''
-cap = cap[:a] + replacement + cap[e:]
+# Replace the complete old overlay layout, from the outer Box through its closing brace.
+box_start = cap.find('    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {')
+if box_start < 0: raise SystemExit("ScannerCapture outer Box not found")
+box_a, box_e = balanced_block(cap, box_start)
+cap = cap[:box_a] + replacement + cap[box_e:]
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
 scanner = scanner.replace(
     'CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode)))',
@@ -80,9 +88,7 @@ for imp in imports:
     if imp not in gallery:
         gallery = gallery.replace(anchor, anchor + imp + '\n', 1) if anchor in gallery else gallery
 GALLERY.write_text(gallery, encoding="utf-8")
-
 exec(Path("tools/fix_gallery_pager.py").read_text(encoding="utf-8"), globals())
-
 gallery = GALLERY.read_text(encoding="utf-8")
 for imp in imports:
     if imp not in gallery:
@@ -98,8 +104,10 @@ main_final = MAIN.read_text(encoding="utf-8")
 qr_final = QR.read_text(encoding="utf-8")
 gallery_final = GALLERY.read_text(encoding="utf-8")
 checks = {
-    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap and 'onPrimaryAction = onCapture' in cap,
-    "scanner controls anchored bottom": '.align(Alignment.BottomCenter)' in cap,
+    "scanner camera-sized preview region": 'Box(Modifier.fillMaxWidth().weight(1f))' in cap and 'AndroidView(' in cap and 'ScannerPageGuide(detectedQuad)' in cap,
+    "scanner controls below preview": cap.find('CameraSectionControls(') > cap.find('Box(Modifier.fillMaxWidth().weight(1f))'),
+    "scanner bottom navigation below controls": cap.find('CameraSectionBottomNavigation(') > cap.find('CameraSectionControls('),
+    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'onPrimaryAction = onCapture' in cap,
     "scanner PAGES opens preview": 'onFlip = onFinish' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
