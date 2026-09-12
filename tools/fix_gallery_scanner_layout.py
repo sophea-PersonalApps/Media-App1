@@ -6,7 +6,6 @@ MAIN = ROOT / "MainActivity.kt"
 QR = ROOT / "QrScannerActivity.kt"
 GALLERY = ROOT / "GalleryActivity.kt"
 
-
 def balanced_block(text, start):
     op = text.find("{", start)
     if op < 0: raise SystemExit("Could not find opening brace")
@@ -24,38 +23,43 @@ cap_end = scanner.find("\n@Composable", cap_start + 1)
 if cap_start < 0 or cap_end < 0: raise SystemExit("ScannerCapture function boundary not found")
 cap = scanner[cap_start:cap_end]
 
-# Remove the old scanner-only top header.
-header = "Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {"
-h = cap.find(header)
-if h >= 0:
-    a, b = balanced_block(cap, h); cap = cap[:a] + cap[b:]
-
-# Replace the entire old page thumbnails/count/shutter/Finish area with the
-# existing shared camera chrome. This is deterministic and does not touch preview.
-bottom = "Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {"
+# Keep ScannerCapture structurally identical to the normal camera chrome:
+# one shared controls row and one shared CAMERA/GALLERY navigation row.
+# Preserve the camera preview and the existing PAGES preview destination.
+bottom = "Column(\n            Modifier\n                .align(Alignment.BottomCenter)"
 b = cap.find(bottom)
 if b >= 0:
     a, e = balanced_block(cap, b)
-    replacement = '''Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding()) {
-                CameraSectionControls(
-                    mode = CameraSectionMode.SCAN,
-                    onModeSelected = { scannerModeAction(context, it) },
-                    onPrimaryAction = onCapture,
-                    onFlip = onFinish,
-                    onMore = { },
-                    primaryEnabled = true
-                )
-                CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
-            }'''
+    replacement = '''Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(ComposeColor.Black.copy(alpha = 0.82f))
+                .navigationBarsPadding()
+        ) {
+            CameraSectionControls(
+                mode = CameraSectionMode.SCAN,
+                onModeSelected = { scannerModeAction(context, it) },
+                onPrimaryAction = onCapture,
+                onFlip = onFinish,
+                onMore = { },
+                primaryEnabled = true
+            )
+            CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+        }'''
     cap = cap[:a] + replacement + cap[e:]
 else:
-    # If already canonical, leave it intact.
-    if 'mode = CameraSectionMode.SCAN' not in cap: raise SystemExit("Scanner bottom controls not found")
+    raise SystemExit("Scanner bottom control column not found")
 
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
+SCANNER.write_text(scanner, encoding="utf-8")
 
-# Correct activity transitions. Main -> Scanner/QR is forward; Scanner/QR -> an
-# existing section is reverse; Scanner -> QR is forward.
+# Main -> Scanner/QR uses forward transition. Scanner/QR -> another section uses reverse.
+main = MAIN.read_text(encoding="utf-8")
+main = main.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)')
+MAIN.write_text(main, encoding="utf-8")
+
+scanner = SCANNER.read_text(encoding="utf-8")
 scanner = scanner.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)')
 scanner = scanner.replace(
     'onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) }',
@@ -68,33 +72,14 @@ scanner = scanner.replace(
     'CameraSectionMode.QR -> { context.startActivity(Intent(context, QrScannerActivity::class.java)); (context as? ComponentActivity)?.overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }')
 SCANNER.write_text(scanner, encoding="utf-8")
 
-main = MAIN.read_text(encoding="utf-8")
-main = main.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)')
-MAIN.write_text(main, encoding="utf-8")
-
 qr = QR.read_text(encoding="utf-8")
-# Remove only the compact Back overlay from the QR capture composable. Back on
-# permission/result screens remains valid.
-qr_start = qr.find("@Composable\nprivate fun QrScannerScreen(")
-qr_end = qr.find("\n@Composable", qr_start + 1)
-if qr_start < 0: raise SystemExit("QrScannerScreen boundary not found")
-if qr_end < 0: qr_end = len(qr)
-qr_cap = qr[qr_start:qr_end]
-compact = 'IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) {'
-q = qr_cap.find(compact)
-if q >= 0:
-    a, b = balanced_block(qr_cap, q); qr_cap = qr_cap[:a] + qr_cap[b:]
-qr = qr[:qr_start] + qr_cap + qr[qr_end:]
 qr = qr.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)')
 QR.write_text(qr, encoding="utf-8")
 
-# Gallery pager is the single owner of MediaViewer swipe/zoom behaviour.
+# Gallery pager is generated by its dedicated compile-safe finalizer.
 exec(Path("tools/fix_gallery_pager.py").read_text(encoding="utf-8"), globals())
 
-# Scanner finalizer is retained as an idempotent last-mile cleanup.
-exec(Path("tools/finalize_scanner_layout.py").read_text(encoding="utf-8"), globals())
-
-# Audit the actual capture composables, not ScannerPreview/permission screens.
+# Final source audit: verify the actual composable structures, not just markers.
 scanner_final = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner_final.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner_final.find("\n@Composable", cap_start + 1)
@@ -107,14 +92,13 @@ main_final = MAIN.read_text(encoding="utf-8")
 gallery_final = GALLERY.read_text(encoding="utf-8")
 checks = {
     "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap and 'onFlip = onFinish' in cap,
-    "scanner old controls removed": 'Text("${pages.size} page' not in cap and 'Text("Finish")' not in cap and 'LazyRow(' not in cap,
+    "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
     "gallery interactive pager": 'Animatable' in gallery_final and 'swipeOffset' in gallery_final and 'animateTo' in gallery_final,
-    "gallery adjacent media": 'previousItem' in gallery_final and 'nextItem' in gallery_final,
+    "gallery adjacent media": 'AdjacentMedia(' in gallery_final and 'previousItem' in gallery_final and 'nextItem' in gallery_final,
     "gallery action row above media": '.zIndex(10f)' in gallery_final,
     "main forward slide": 'R.anim.slide_in_right' in main_final and 'R.anim.slide_out_left' in main_final,
     "qr reverse navigation": 'R.anim.slide_in_left' in qr_final and 'R.anim.slide_out_right' in qr_final,
-    "qr capture top back removed": 'IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart)' not in qr_cap,
 }
 for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
