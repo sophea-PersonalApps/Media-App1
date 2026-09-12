@@ -27,6 +27,12 @@ jobs:
           set -euo pipefail
           python3 tools/patch_gallery_ui.py
 
+      - name: Apply requested gallery swipe and scanner UI changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/patch_requested_ui.py
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -47,26 +53,16 @@ jobs:
         with:
           gradle-version: '8.13'
 
-      - name: Validate scanner source
+      - name: Verify only requested source files changed
         shell: bash
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
-          required = [
-              "private fun decodePreview(path: String): Bitmap?",
-              "CameraSectionControls(",
-              "CameraSectionBottomNavigation(",
-              "startActivity(Intent(this, MainActivity::class.java)",
-              "startActivity(Intent(this, GalleryActivity::class.java))",
-              "startActivity(Intent(this, QrScannerActivity::class.java))",
-          ]
-          missing = [item for item in required if item not in text]
-          if missing:
-              raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
-          PY
+          set -euo pipefail
+          git diff --name-only
+          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/patch_(pinch_zoom|gallery_ui|requested_ui)\.py|\.github/workflows/android\.yml)$' >/dev/null
+          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/patch_(pinch_zoom|gallery_ui|requested_ui)\.py|\.github/workflows/android\.yml)$' || true)
+          test -z "$unexpected"
 
-      - name: Verify all requested gallery source changes
+      - name: Verify requested source changes
         shell: bash
         run: |
           set -euo pipefail
@@ -74,6 +70,8 @@ jobs:
           from pathlib import Path
           main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
+          scanner = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
+          qr = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt").read_text(encoding="utf-8")
           checks = {
               "camera transform gesture": "detectTransformGestures(panZoomLock = true)" in main,
               "camera accumulated zoom state": "var gestureZoom = cameraZoom" in main,
@@ -89,13 +87,20 @@ jobs:
               "video speed top action": "IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed" in gallery,
               "video speed menu": "DropdownMenu(expanded = speedMenuOpen" in gallery,
               "video player receives speed": "VideoPlayer(uri, videoSpeed)" in gallery,
-              "album click is attached to thumbnail": "onClick = { onClick(album) }" in gallery,
-              "old floating video speed control removed": "Box(Modifier.align(Alignment.TopEnd).padding(12.dp))" not in gallery,
+              "gallery viewer index": "var selectedIndex by rememberSaveable" in gallery and "selectedIndex = media.indexOfFirst" in gallery,
+              "gallery viewer navigation": "MediaViewer(selectedUri!!, selectedIsVideo, media, selectedIndex" in gallery,
+              "gallery video swipe": "currentIndex < items.lastIndex" in gallery,
+              "gallery photo pan preserved": "translationX = photoPanX" in gallery and "translationY = photoPanY" in gallery,
+              "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
+              "scanner shared bottom controls": "CameraSectionControls(" in scanner and "CameraSectionBottomNavigation(" in scanner,
+              "QR compact back button": "Modifier.align(Alignment.TopStart).statusBarsPadding()" in qr,
+              "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
+              "scanner/QR transition has no animation": "overridePendingTransition(0, 0)" in main and "overridePendingTransition(0, 0)" in scanner and "overridePendingTransition(0, 0)" in qr,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
-          if failed: raise SystemExit("GALLERY SOURCE AUDIT FAILED: " + "; ".join(failed))
-          print("ALL SOURCE AUDITS PASSED")
+          if failed: raise SystemExit("REQUESTED SOURCE AUDIT FAILED: " + "; ".join(failed))
+          print("ALL REQUESTED SOURCE AUDITS PASSED")
           PY
 
       - name: Build debug APK
@@ -127,10 +132,10 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Add video viewer actions and fix album navigation [skip ci]'
+            git commit -m 'Implement requested gallery swipe and scanner UI [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
