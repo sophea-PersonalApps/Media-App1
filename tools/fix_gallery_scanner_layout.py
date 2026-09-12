@@ -31,6 +31,7 @@ if column_start < 0: raise SystemExit("Scanner bottom control Column not found")
 a, e = balanced_block(cap, column_start)
 replacement = '''Column(
             Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(ComposeColor.Black.copy(alpha = 0.82f))
                 .navigationBarsPadding()
@@ -98,6 +99,7 @@ qr_final = QR.read_text(encoding="utf-8")
 gallery_final = GALLERY.read_text(encoding="utf-8")
 checks = {
     "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap and 'onPrimaryAction = onCapture' in cap,
+    "scanner controls anchored bottom": '.align(Alignment.BottomCenter)' in cap,
     "scanner PAGES opens preview": 'onFlip = onFinish' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
