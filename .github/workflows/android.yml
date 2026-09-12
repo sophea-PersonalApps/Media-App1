@@ -95,8 +95,8 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only
-          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' >/dev/null
-          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' || true)
+          git diff --name-only | grep -E '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|app/src/main/res/anim/(slide_in_right|slide_out_left|slide_in_left|slide_out_right)\.xml|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' >/dev/null
+          unexpected=$(git diff --name-only | grep -Ev '^(app/src/main/java/com/devlinguistpro/mediatoolbox/(MainActivity|GalleryActivity|ScannerActivity|QrScannerActivity)\.kt|app/src/main/res/anim/(slide_in_right|slide_out_left|slide_in_left|slide_out_right)\.xml|tools/(patch_(pinch_zoom|gallery_ui|requested_ui)|add_gallery_swipe_import|fix_gallery_scanner_layout)\.py|\.github/workflows/android\.yml)$' || true)
           test -z "$unexpected"
 
       - name: Verify requested source changes
@@ -133,7 +133,7 @@ jobs:
               "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "ScannerSectionControls(" in scanner,
               "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner,
               "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
-              "scanner and QR forward animations": "CameraSectionMode.SCAN -> { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left) }" in main and "overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left)" in scanner and "overridePendingTransition(android.R.anim.slide_in_left, android.R.anim.slide_out_right)" in qr,
+              "scanner and QR forward animations": "R.anim.slide_in_right" in main and "R.anim.slide_in_right" in scanner and "R.anim.slide_in_left" in qr,
               "gallery interactive swipe": "var swipeOffset by rememberSaveable(uri)" in gallery,
               "gallery adjacent photo": "previousBitmap" in gallery and "nextBitmap" in gallery,
               "gallery continuous swipe animation": "settle.animateTo(targetOffset, tween(180))" in gallery,
@@ -176,7 +176,7 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt
+          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt app/src/main/res/anim/slide_in_right.xml app/src/main/res/anim/slide_out_left.xml app/src/main/res/anim/slide_in_left.xml app/src/main/res/anim/slide_out_right.xml
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
