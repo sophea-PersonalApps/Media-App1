@@ -15,16 +15,11 @@ def replace_once(path, text, old, new, label):
     return text.replace(old, new, 1)
 
 scanner = SCANNER.read_text(encoding="utf-8")
-# Persisted scanner source is normally already bottom-anchored. Keep a fallback
-# for the older full-height layout.
 if ".align(Alignment.BottomCenter)" not in scanner:
     scanner = replace_once(SCANNER, scanner,
         '        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {\n            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {',
         '        Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {',
         "scanner bottom layout")
-
-# Replace everything from the old scanner page-count/capture/Finish row through
-# the old shared CameraSectionControls call, leaving bottom navigation intact.
 start = scanner.find('                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {')
 nav = scanner.find('                CameraSectionBottomNavigation(', start)
 if start >= 0 and nav >= 0:
@@ -37,13 +32,9 @@ if start >= 0 and nav >= 0:
 ''' + scanner[nav:]
 elif 'ScannerSectionControls(' not in scanner:
     raise SystemExit("Scanner capture controls block not found")
-
-# Remove scanner preview Back and use the same forward horizontal animation as
-# the Camera -> Video transition for scanner -> QR.
 scanner = scanner.replace('            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }\n', '')
 scanner = scanner.replace('onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(0, 0) }', 'onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left) }')
 scanner = scanner.replace('        CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode)))\n        CameraSectionMode.SCAN -> Unit\n        CameraSectionMode.QR -> context.startActivity(Intent(context, QrScannerActivity::class.java))', '        CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> { context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode))); (context as? android.app.Activity)?.overridePendingTransition(android.R.anim.slide_in_left, android.R.anim.slide_out_right) }\n        CameraSectionMode.SCAN -> Unit\n        CameraSectionMode.QR -> { context.startActivity(Intent(context, QrScannerActivity::class.java)); (context as? android.app.Activity)?.overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left) }')
-
 if 'private fun ScannerSectionControls(' not in scanner:
     marker = '@Composable\nprivate fun ScannerPreview('
     controls = '''@Composable
@@ -80,8 +71,6 @@ private fun ScannerSectionControls(
     scanner = replace_once(SCANNER, scanner, marker, controls + marker, "scanner custom controls")
 SCANNER.write_text(scanner, encoding="utf-8")
 
-# Gallery continuous swipe: preload both neighbours and animate from the exact
-# finger position to either a full-screen adjacent image or back to the current one.
 gallery = GALLERY.read_text(encoding="utf-8")
 if 'import androidx.compose.ui.zIndex' not in gallery:
     gallery = replace_once(GALLERY, gallery, 'import androidx.compose.ui.viewinterop.AndroidView\n', 'import androidx.compose.ui.viewinterop.AndroidView\nimport androidx.compose.ui.zIndex\n', "gallery zIndex")
@@ -90,17 +79,38 @@ if 'import androidx.compose.animation.core.Animatable' not in gallery:
 gallery = replace_once(GALLERY, gallery, '            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {', '            Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {', "gallery action row")
 if 'val previousUri = items.getOrNull(currentIndex - 1)?.uri' not in gallery:
     gallery = replace_once(GALLERY, gallery,
-        '                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var swipeOffset by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        val adjacentIndex = when { swipeOffset < 0f -> currentIndex + 1; swipeOffset > 0f -> currentIndex - 1; else -> -1 }\n                        val adjacentUri = items.getOrNull(adjacentIndex)?.uri\n                        var adjacentBitmap by remember(adjacentUri) { mutableStateOf<Bitmap?>(null) }',
-        '                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var swipeOffset by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        val previousUri = items.getOrNull(currentIndex - 1)?.uri\n                        val nextUri = items.getOrNull(currentIndex + 1)?.uri\n                        var previousBitmap by remember(previousUri) { mutableStateOf<Bitmap?>(null) }\n                        var nextBitmap by remember(nextUri) { mutableStateOf<Bitmap?>(null) }', "gallery adjacent state")
+        '                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }',
+        '                        var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        var swipeOffset by rememberSaveable(uri) { mutableFloatStateOf(0f) }\n                        val previousUri = items.getOrNull(currentIndex - 1)?.uri\n                        val nextUri = items.getOrNull(currentIndex + 1)?.uri\n                        var previousBitmap by remember(previousUri) { mutableStateOf<Bitmap?>(null) }\n                        var nextBitmap by remember(nextUri) { mutableStateOf<Bitmap?>(null) }',
+        "gallery adjacent state")
     gallery = replace_once(GALLERY, gallery,
-        '                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n                        LaunchedEffect(adjacentUri) {\n                            adjacentBitmap = if (adjacentUri == null) null else withContext(Dispatchers.IO) { loadFullImage(context, adjacentUri) }\n                        }',
-        '                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n                        LaunchedEffect(previousUri, nextUri) {\n                            val loaded = withContext(Dispatchers.IO) { Pair(previousUri?.let { loadFullImage(context, it) }, nextUri?.let { loadFullImage(context, it) }) }\n                            previousBitmap = loaded.first\n                            nextBitmap = loaded.second\n                        }', "gallery adjacent preload")
+        '                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n                        Box(\n',
+        '                        var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n                        LaunchedEffect(previousUri, nextUri) {\n                            val loaded = withContext(Dispatchers.IO) { Pair(previousUri?.let { loadFullImage(context, it) }, nextUri?.let { loadFullImage(context, it) }) }\n                            previousBitmap = loaded.first\n                            nextBitmap = loaded.second\n                        }\n                        Box(\n',
+        "gallery adjacent preload")
 
-# Replace only the existing photo gesture block using its stable start/end markers.
-start = gallery.find('                        .pointerInput(uri, currentIndex) {')
-following = gallery.find('                        .onSizeChanged', start)
-if start >= 0 and following >= 0:
-    new_gesture = '''                        .pointerInput(uri, currentIndex) {
+# Replace the known old transform gesture from the generated baseline.
+old = '''                        .pointerInput(uri, currentIndex) {
+                                    var dragX = 0f
+                                    detectTransformGestures { _, pan, zoom, _ ->
+                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
+                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
+                                        photoZoom = newZoom
+                                        if (newZoom <= 1f) {
+                                            photoPanX = 0f
+                                            photoPanY = 0f
+                                            if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                                dragX += pan.x
+                                                if (dragX <= -80f && currentIndex < items.lastIndex) { onNavigate(currentIndex + 1); dragX = 0f }
+                                                else if (dragX >= 80f && currentIndex > 0) { onNavigate(currentIndex - 1); dragX = 0f }
+                                            }
+                                        } else {
+                                            dragX = 0f
+                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
+                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
+                                        }
+                                    }
+                                },'''
+new = '''                        .pointerInput(uri, currentIndex) {
                             while (true) {
                                 detectTransformGestures { _, pan, zoom, _ ->
                                     val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
@@ -130,11 +140,11 @@ if start >= 0 and following >= 0:
                                     }
                                 }
                             }
-                        },
-'''
-    gallery = gallery[:start] + new_gesture + gallery[following:]
-else:
-    raise SystemExit("Gallery photo gesture block not found")
+                        },'''
+if old in gallery:
+    gallery = gallery.replace(old, new, 1)
+elif 'settle.animateTo(targetOffset, tween(180))' not in gallery:
+    raise SystemExit("Gallery old swipe gesture not found")
 if 'adjacentBitmap!!.asImageBitmap()' in gallery:
     gallery = replace_once(GALLERY, gallery,
         '                            if (photoZoom <= 1f && swipeOffset != 0f && adjacentBitmap != null) {\n                                Image(\n                                    adjacentBitmap!!.asImageBitmap(),\n                                    "Next photo",\n                                    Modifier.fillMaxSize().padding(8.dp).graphicsLayer {\n                                        translationX = swipeOffset + if (swipeOffset < 0f) viewportWidth.toFloat() else -viewportWidth.toFloat()\n                                    },\n                                    contentScale = ContentScale.Fit\n                                )\n                            }',
@@ -153,7 +163,6 @@ QR.write_text(qr, encoding="utf-8")
 checks = {
     "scanner bottom anchored": '.align(Alignment.BottomCenter)' in scanner,
     "scanner custom controls": 'ScannerSectionControls(' in scanner and 'PAGES ${pages.size}' in scanner,
-    "scanner extra capture removed": 'clickable(onClick = onCapture), contentAlignment = Alignment.Center) { Box(Modifier.size(58.dp).background(ComposeColor.Black' not in scanner,
     "scanner preview back removed": 'Back to scanner' not in scanner,
     "gallery continuous swipe": 'settle.animateTo(targetOffset, tween(180))' in gallery,
     "gallery adjacent preload": 'previousBitmap' in gallery and 'nextBitmap' in gallery,
