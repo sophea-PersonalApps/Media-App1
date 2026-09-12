@@ -50,12 +50,18 @@ if "CameraSectionControls(" in scanner:
                         Text("MORE", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
                     }
                     Box(
-                        Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture),
+                        Modifier.size(72.dp)
+                            .background(ComposeColor.White, CircleShape)
+                            .padding(5.dp)
+                            .clickable(onClick = onCapture),
                         contentAlignment = Alignment.Center
                     ) {
                         Box(Modifier.size(58.dp).background(ComposeColor.White, CircleShape))
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)
+                    ) {
                         Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
                             Icon(Icons.Default.Folder, "Pages", tint = ComposeColor.White)
                         }
@@ -91,6 +97,9 @@ if "import androidx.compose.animation.core.Animatable" not in gallery:
 if "import androidx.compose.runtime.rememberCoroutineScope" not in gallery:
     anchor = "import androidx.compose.runtime.rememberSaveable\n"
     if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import androidx.compose.runtime.rememberCoroutineScope\n", 1)
+if "import kotlinx.coroutines.launch" not in gallery:
+    anchor = "import kotlinx.coroutines.withContext\n"
+    if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import kotlinx.coroutines.launch\n", 1)
 if ".zIndex(10f)" not in gallery:
     gallery = replace_once(gallery, "Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {", "Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {", "gallery action row")
 state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
