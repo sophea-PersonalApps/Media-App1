@@ -84,7 +84,7 @@ jobs:
               "gallery drag animation": "animateTo(destination, tween(180))" in gallery,
               "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectTransformGestures" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
-              "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.draw.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
+              "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
               "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap,
               "scanner PAGES action": "onFlip = onFinish" in cap,
               "scanner old control stack removed": 'Text("Finish")' not in cap and "LazyRow(" not in cap and 'Text("MORE"' not in cap,
