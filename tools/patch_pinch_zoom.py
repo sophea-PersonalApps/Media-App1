@@ -1,7 +1,17 @@
 from pathlib import Path
+import subprocess
 
 MAIN = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
 GALLERY = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
+
+# The workflow persists generated app sources on the test branch after a successful build.
+# Always reset the three activity sources that later patch scripts expect to their clean
+# main-branch form before applying this run's transformations. Gallery is restored by the
+# workflow itself because it has its own known baseline commit.
+subprocess.run(["git", "checkout", "main", "--",
+                "app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt",
+                "app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt",
+                "app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt"], check=True)
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
     count = text.count(old)
@@ -56,9 +66,7 @@ new_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(A
 text = replace_once(text, old_camera, new_camera, "camera gesture block")
 MAIN.write_text(text, encoding="utf-8")
 
-# GALLERY: pinch zoom plus one-finger pan after zooming. Positive pan.y moves the
-# enlarged image down, exposing the upper part of the photo. Use onSizeChanged
-# because viewport dimensions are needed inside the pointerInput coroutine.
+# GALLERY: pinch zoom plus one-finger pan after zooming.
 text = GALLERY.read_text(encoding="utf-8")
 if "import androidx.compose.ui.layout.onSizeChanged" not in text:
     anchor = "import androidx.compose.ui.graphics.graphicsLayer\n"
@@ -139,4 +147,4 @@ if "detectHorizontalDragGestures" in main:
     raise SystemExit("Old competing camera horizontal gesture handler remains")
 if "onZoom(cameraZoom * zoom)" in main:
     raise SystemExit("Old non-accumulating camera zoom implementation remains")
-print("Pinch zoom + gallery pan implementation applied and audited.")
+print("Clean camera/scanner/QR sources restored; pinch zoom + gallery pan implementation applied and audited.")
