@@ -3,9 +3,6 @@ import subprocess
 
 MAIN = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
 
-# Restore only the known-good camera/scanner/QR sources. Gallery is deliberately
-# owned by the later Gallery pager finalizer so two patch stages cannot target the
-# same MediaViewer structure and fail when the viewer has already changed.
 subprocess.run(["git", "checkout", "origin/main", "--",
                 "app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt",
                 "app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt",
@@ -46,14 +43,8 @@ new_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(A
                 } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                     horizontalDrag += pan.x
                     when {
-                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> {
-                            onModeChanged(modes[selectedIndex + 1])
-                            horizontalDrag = 0f
-                        }
-                        horizontalDrag >= 80f && selectedIndex > 0 -> {
-                            onModeChanged(modes[selectedIndex - 1])
-                            horizontalDrag = 0f
-                        }
+                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> { onModeChanged(modes[selectedIndex + 1]); horizontalDrag = 0f }
+                        horizontalDrag >= 80f && selectedIndex > 0 -> { onModeChanged(modes[selectedIndex - 1]); horizontalDrag = 0f }
                     }
                 }
             }
@@ -63,12 +54,8 @@ text = replace_once(text, old_camera, new_camera, "camera gesture block")
 MAIN.write_text(text, encoding="utf-8")
 
 main = MAIN.read_text(encoding="utf-8")
-required = ["detectTransformGestures(panZoomLock = true)", "var gestureZoom = cameraZoom", "gestureZoom = (gestureZoom * zoom)"]
-for item in required:
-    if item not in main:
-        raise SystemExit(f"Required camera pinch implementation missing: {item}")
-if "detectHorizontalDragGestures" in main:
-    raise SystemExit("Old competing camera horizontal gesture handler remains")
-if "onZoom(cameraZoom * zoom)" in main:
-    raise SystemExit("Old non-accumulating camera zoom implementation remains")
+for item in ["detectTransformGestures(panZoomLock = true)", "var gestureZoom = cameraZoom", "gestureZoom = (gestureZoom * zoom)"]:
+    if item not in main: raise SystemExit(f"Required camera pinch implementation missing: {item}")
+if "detectHorizontalDragGestures" in main: raise SystemExit("Old competing camera horizontal gesture handler remains")
+if "onZoom(cameraZoom * zoom)" in main: raise SystemExit("Old non-accumulating camera zoom implementation remains")
 print("Clean camera/scanner/QR sources restored from origin/main; camera pinch implementation applied and audited. Gallery is intentionally left to the Gallery pager finalizer.")
