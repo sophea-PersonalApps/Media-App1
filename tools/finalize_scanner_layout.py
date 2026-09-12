@@ -3,52 +3,37 @@ from pathlib import Path
 p = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt")
 s = p.read_text(encoding="utf-8")
 
-def block_after(marker, open_char="("):
-    start = s.find(marker)
-    if start < 0:
-        return None
-    op = s.find(open_char, start)
-    if op < 0:
-        raise SystemExit(f"Missing opening delimiter for {marker}")
+def balanced_brace(text, start):
+    op = text.find("{", start)
+    if op < 0: raise SystemExit("Scanner layout block opening brace not found")
     depth = 0
-    for i in range(op, len(s)):
-        if s[i] == open_char: depth += 1
-        elif s[i] == (')' if open_char == '(' else '}'):
+    for i in range(op, len(text)):
+        if text[i] == "{": depth += 1
+        elif text[i] == "}":
             depth -= 1
-            if depth == 0:
-                return start, i + 1
-    raise SystemExit(f"Unbalanced block for {marker}")
+            if depth == 0: return start, i + 1
+    raise SystemExit("Scanner layout block has unbalanced braces")
 
-# Remove the scanner-specific top header so the camera preview gets the same usable area as PHOTO/VIDEO.
-header_marker = 'Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {'
-h = block_after(header_marker, '{')
-if h:
-    s = s[:h[0]] + s[h[1]:]
+header = 'Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {'
+h = s.find(header)
+if h >= 0:
+    a, b = balanced_brace(s, h)
+    s = s[:a] + s[b:]
 
-# Remove the old page thumbnails/count/shutter/Finish controls above the shared camera chrome.
-page_row_marker = 'if (pages.isNotEmpty()) {'
-start = s.find(page_row_marker)
-if start >= 0:
-    # This occurrence is the capture-screen page strip. Find the following shared controls row and remove everything between the two.
-    controls_marker = 'CameraSectionControls('
-    controls = s.find(controls_marker, start)
-    if controls < 0: raise SystemExit("Scanner shared controls marker not found")
-    s = s[:start] + s[controls:]
+page_strip = 'if (pages.isNotEmpty()) {'
+ps = s.find(page_strip)
+controls_comment = '// ScannerSectionControls: MORE | shutter | PAGES'
+cc = s.find(controls_comment, ps)
+if ps >= 0 and cc > ps:
+    s = s[:ps] + s[cc:]
 
-# Replace the generated custom controls with the same shared camera chrome used by PHOTO/VIDEO.
-marker = 'CameraSectionControls('
-start = s.find(marker)
-if start < 0: raise SystemExit("Scanner CameraSectionControls call not found")
-op = s.find('(', start); depth = 0; end = None
-for i in range(op, len(s)):
-    if s[i] == '(': depth += 1
-    elif s[i] == ')':
-        depth -= 1
-        if depth == 0:
-            end = i + 1
-            break
-if end is None: raise SystemExit("Unbalanced Scanner CameraSectionControls call")
-shared = '''CameraSectionControls(
+comment = '// ScannerSectionControls: MORE | shutter | PAGES'
+cs = s.find(comment)
+if cs >= 0:
+    row = s.find('Row(', cs)
+    if row < 0: raise SystemExit("Generated scanner controls Row not found")
+    a, b = balanced_brace(s, row)
+    shared = '''CameraSectionControls(
                     mode = CameraSectionMode.SCAN,
                     onModeSelected = { scannerModeAction(context, it) },
                     onPrimaryAction = onCapture,
@@ -56,8 +41,7 @@ shared = '''CameraSectionControls(
                     onMore = { },
                     primaryEnabled = true
                 )'''
-s = s[:start] + shared + s[end:]
+    s = s[:cs] + shared + s[b:]
 
-# The shared CAMERA/GALLERY navigation remains the final bottom row, exactly like the normal camera.
 p.write_text(s, encoding="utf-8")
-print("Scanner finalized: no duplicate page/shutter controls, normal camera chrome retained, PAGES replaces FLIP.")
+print("Scanner finalized: normal camera layout, shared modes, shared bottom navigation, PAGES replaces FLIP.")
