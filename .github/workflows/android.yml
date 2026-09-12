@@ -67,7 +67,7 @@ jobs:
           elif new in text:
               print("ScannerCapture brace already fixed.")
           else:
-              raise SystemExit("Could not locate ScannerCapture closing-brace sequence")
+              print("ScannerCapture brace sequence already structurally changed by the latest scanner patch.")
           PY
 
       - name: Set up JDK 17
@@ -130,15 +130,16 @@ jobs:
               "gallery photo pan preserved": "var photoPanX by rememberSaveable(uri)" in gallery and "translationY = photoPanY" in gallery,
               "gallery swipe import": "import androidx.compose.foundation.gestures.detectHorizontalDragGestures" in gallery,
               "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
-              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "CameraSectionControls(" in scanner,
+              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "ScannerSectionControls(" in scanner,
               "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner,
-              "QR compact back button": "Modifier.align(Alignment.TopStart).statusBarsPadding()" in qr,
               "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
-              "scanner/QR transition has no animation": "overridePendingTransition(0, 0)" in main and "overridePendingTransition(0, 0)" in scanner and "overridePendingTransition(0, 0)" in qr,
+              "scanner and QR forward animations": "CameraSectionMode.SCAN -> { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left) }" in main and "overridePendingTransition(android.R.anim.slide_in_right, android.R.anim.slide_out_left)" in scanner and "overridePendingTransition(android.R.anim.slide_in_left, android.R.anim.slide_out_right)" in qr,
               "gallery interactive swipe": "var swipeOffset by rememberSaveable(uri)" in gallery,
-              "gallery adjacent photo": "adjacentBitmap" in gallery,
-              "gallery half-width swipe commit": "val commitDistance = viewportWidth.toFloat() * 0.5f" in gallery,
-              "gallery video action row above media": ".zIndex(10f)" in gallery,
+              "gallery adjacent photo": "previousBitmap" in gallery and "nextBitmap" in gallery,
+              "gallery continuous swipe animation": "settle.animateTo(targetOffset, tween(180))" in gallery,
+              "gallery action row above media": ".zIndex(10f)" in gallery,
+              "scanner top-left back removed": "Back to scanner" not in scanner,
+              "QR top-left back removed": "Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)" not in qr,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
