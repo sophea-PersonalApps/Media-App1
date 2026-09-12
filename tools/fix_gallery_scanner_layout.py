@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 ROOT = Path("app/src/main/java/com/devlinguistpro/mediatoolbox")
 SCANNER = ROOT / "ScannerActivity.kt"
@@ -8,26 +9,31 @@ GALLERY = ROOT / "GalleryActivity.kt"
 
 def balanced_block(text, start):
     op = text.find("{", start)
-    if op < 0: raise SystemExit("Could not find opening brace")
+    if op < 0:
+        raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
-        if text[i] == "{": depth += 1
+        if text[i] == "{":
+            depth += 1
         elif text[i] == "}":
             depth -= 1
-            if depth == 0: return start, i + 1
+            if depth == 0:
+                return start, i + 1
     raise SystemExit("Unbalanced Kotlin block")
 
 scanner = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner.find("\n@Composable", cap_start + 1)
-if cap_start < 0 or cap_end < 0: raise SystemExit("ScannerCapture function boundary not found")
+if cap_start < 0 or cap_end < 0:
+    raise SystemExit("ScannerCapture function boundary not found")
 cap = scanner[cap_start:cap_end]
 
-# Remove the old scanner-only control stack and replace it with the shared
-# camera chrome. The actual page thumbnails remain in ScannerPreview.
-column_start = cap.find("Column(\n            Modifier\n                .align(Alignment.BottomCenter)")
-if column_start < 0: raise SystemExit("Scanner bottom control column not found")
-a, e = balanced_block(cap, column_start)
+# Locate the bottom control Column by structure rather than exact whitespace.
+# This survives the generated scanner source having optional padding or comments.
+match = re.search(r"Column\(\s*Modifier\s*\.align\(Alignment\.BottomCenter\)", cap)
+if not match:
+    raise SystemExit("Scanner bottom control column not found")
+a, e = balanced_block(cap, match.start())
 replacement = '''Column(
             Modifier
                 .align(Alignment.BottomCenter)
@@ -43,7 +49,11 @@ replacement = '''Column(
                 onMore = { },
                 primaryEnabled = true
             )
-            CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+            CameraSectionBottomNavigation(
+                cameraSelected = true,
+                onCamera = onOpenCamera,
+                onGallery = onOpenGallery
+            )
         }'''
 cap = cap[:a] + replacement + cap[e:]
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
@@ -86,7 +96,9 @@ checks = {
     "main forward slide": 'R.anim.slide_in_right' in main_final and 'R.anim.slide_out_left' in main_final,
     "qr reverse navigation": 'R.anim.slide_in_left' in qr_final and 'R.anim.slide_out_right' in qr_final,
 }
-for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
+for name, ok in checks.items():
+    print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
-if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
+if failed:
+    raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
 print("Final gallery/scanner/QR layout audit passed.")
