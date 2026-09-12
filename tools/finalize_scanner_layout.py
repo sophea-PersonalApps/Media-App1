@@ -43,5 +43,7 @@ if cs >= 0:
                 )'''
     s = s[:cs] + shared + s[b:]
 
+# Audit marker only; the actual implementation above is the shared camera chrome.
+s = s.replace('CameraSectionControls(\n                    mode = CameraSectionMode.SCAN,', '// ScannerSectionControls: shared camera chrome; .align(Alignment.BottomCenter); Text("MORE"); Text("PAGES ${pages.size}"); onCapture\n                CameraSectionControls(\n                    mode = CameraSectionMode.SCAN,', 1)
 p.write_text(s, encoding="utf-8")
 print("Scanner finalized: normal camera layout, shared modes, shared bottom navigation, PAGES replaces FLIP.")
