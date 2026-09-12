@@ -17,7 +17,7 @@ jobs:
 
       - name: Restore GalleryActivity before generated patches
         shell: bash
-        run: git checkout 90df56f4a1d5282fa5464b757aed9f4e340eb099 -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
+        run: git checkout 750b6e3521665165aebe70d5d4d853b3a3e1258f -- app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt
 
       - name: Apply pinch zoom and gallery pan implementation
         shell: bash
