@@ -99,10 +99,10 @@ class QrScannerActivity : ComponentActivity() {
                     onScanAgain = { resultLocked.set(false); result = null },
                     onCopy = { copyResult(result) },
                     onOpen = { openResult(result) },
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
-                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(0, 0) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) },
+                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) }
                 )
             }
         }
@@ -199,8 +199,7 @@ private fun QrScannerScreen(
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
                 QrFinderOverlay()
-                IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                if (result == null) {
+                                if (result == null) {
                     Column(Modifier.align(Alignment.BottomCenter)) {
                         CameraSectionControls(mode = CameraSectionMode.QR, onModeSelected = {
                             when (it) {

@@ -35,6 +35,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -79,6 +81,7 @@ import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 private enum class GalleryTab { PHOTOS, VIDEOS, ALBUMS }
 private data class MediaAccess(val images: Boolean, val videos: Boolean, val partial: Boolean = false) { val any: Boolean get() = images || videos }
@@ -299,15 +302,19 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                     bitmap?.let {
                         var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
                         var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        var swipeOffset by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-                        val adjacentIndex = when { swipeOffset < 0f -> currentIndex + 1; swipeOffset > 0f -> currentIndex - 1; else -> -1 }
-                        val adjacentUri = items.getOrNull(adjacentIndex)?.uri
-                        var adjacentBitmap by remember(adjacentUri) { mutableStateOf<Bitmap?>(null) }
                         var viewportWidth by remember(uri) { mutableIntStateOf(0) }
                         var viewportHeight by remember(uri) { mutableIntStateOf(0) }
-                        LaunchedEffect(adjacentUri) {
-                            adjacentBitmap = if (adjacentUri == null) null else withContext(Dispatchers.IO) { loadFullImage(context, adjacentUri) }
+                        val swipeOffset = remember { Animatable(0f) }
+                        val swipeScope = rememberCoroutineScope()
+                        val previousUri = if (currentIndex > 0) items[currentIndex - 1].uri else null
+                        val nextUri = if (currentIndex >= 0 && currentIndex < items.lastIndex) items[currentIndex + 1].uri else null
+                        var previousBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }
+                        var nextBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }
+                        LaunchedEffect(currentIndex, previousUri, nextUri) {
+                            previousBitmap = previousUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }
+                            nextBitmap = nextUri?.let { u -> withContext(Dispatchers.IO) { context.contentResolver.openInputStream(u)?.use { BitmapFactory.decodeStream(it) } } }
                         }
+
                         Box(
                             Modifier
                                 .fillMaxSize()
@@ -316,7 +323,6 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                     viewportHeight = size.height
                                 }
                                 .pointerInput(uri, currentIndex) {
-                                    var dragX = 0f
                                     detectTransformGestures { _, pan, zoom, _ ->
                                         val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
                                         val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
@@ -326,30 +332,33 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                             photoPanX = 0f
                                             photoPanY = 0f
                                             if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
-                                                dragX += pan.x
-                                                swipeOffset = (swipeOffset + pan.x).coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
-                                                val commitDistance = viewportWidth.toFloat() * 0.5f
-                                                if (viewportWidth > 0 && swipeOffset <= -commitDistance && currentIndex < items.lastIndex) { onNavigate(currentIndex + 1); swipeOffset = 0f; dragX = 0f }
-                                                else if (viewportWidth > 0 && swipeOffset >= commitDistance && currentIndex > 0) { onNavigate(currentIndex - 1); swipeOffset = 0f; dragX = 0f }
+                                                val maxOffset = viewportWidth.toFloat()
+                                                swipeScope.launch { swipeOffset.snapTo((swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset)) }
                                             }
                                         } else {
-                                            dragX = 0f
                                             photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
                                             photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
+                                            swipeScope.launch { swipeOffset.snapTo(0f) }
                                         }
+                                    }
+                                    val threshold = viewportWidth.toFloat() * 0.5f
+                                    val targetIndex = when {
+                                        swipeOffset.value <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                        swipeOffset.value >= threshold && currentIndex > 0 -> currentIndex - 1
+                                        else -> -1
+                                    }
+                                    if (targetIndex >= 0 && viewportWidth > 0) {
+                                        swipeOffset.animateTo(if (targetIndex > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
+                                        onNavigate(targetIndex)
+                                        swipeOffset.snapTo(0f)
+                                    } else {
+                                        swipeOffset.animateTo(0f, tween(160))
                                     }
                                 },
                             contentAlignment = Alignment.Center
                         ) {
-                            if (photoZoom <= 1f && swipeOffset != 0f && adjacentBitmap != null) {
-                                Image(
-                                    adjacentBitmap!!.asImageBitmap(),
-                                    "Next photo",
-                                    Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
-                                        translationX = swipeOffset + if (swipeOffset < 0f) viewportWidth.toFloat() else -viewportWidth.toFloat()
-                                    },
-                                    contentScale = ContentScale.Fit
-                                )
+                            previousBitmap?.let { previous ->
+                                Image(previous.asImageBitmap(), "Previous photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
                             }
                             Image(
                                 it.asImageBitmap(),
@@ -357,11 +366,14 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                 Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
                                     scaleX = photoZoom
                                     scaleY = photoZoom
-                                    translationX = if (photoZoom <= 1f) photoPanX + swipeOffset else photoPanX
+                                    translationX = photoPanX + swipeOffset.value
                                     translationY = photoPanY
                                 },
                                 contentScale = ContentScale.Fit
                             )
+                            nextBitmap?.let { next ->
+                                Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
+                            }
                         }
                     } ?: CircularProgressIndicator(color = Color.White)
                 }

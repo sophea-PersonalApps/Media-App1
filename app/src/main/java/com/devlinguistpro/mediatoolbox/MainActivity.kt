@@ -173,8 +173,8 @@ class MainActivity : ComponentActivity() {
                 cameraZoom = 1f
                 bindCamera(forceRebind = true)
             }
-            CameraSectionMode.SCAN -> { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(0, 0) }
-            CameraSectionMode.QR -> { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(0, 0) }
+            CameraSectionMode.SCAN -> { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
+            CameraSectionMode.QR -> { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
         }
     }
 
