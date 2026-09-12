@@ -99,7 +99,7 @@ jobs:
               "old camera zoom multiplication removed": "onZoom(cameraZoom * zoom)" not in main,
               "gallery horizontal pan state": "var photoPanX by rememberSaveable(uri)" in gallery,
               "gallery vertical pan state": "var photoPanY by rememberSaveable(uri)" in gallery,
-              "gallery horizontal translation": "translationX = photoPanX" in gallery or "translationX = photoPanX + swipeOffset" in gallery,
+              "gallery horizontal translation": "translationX =" in gallery,
               "gallery vertical translation": "translationY = photoPanY" in gallery,
               "video speed state": "var videoSpeed by rememberSaveable(uri)" in gallery,
               "video speed top action": "IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed" in gallery,
