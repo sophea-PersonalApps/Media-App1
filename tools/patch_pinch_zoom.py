@@ -4,11 +4,11 @@ import subprocess
 MAIN = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
 GALLERY = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
 
-# The workflow persists generated app sources on the test branch after a successful build.
-# Always reset the three activity sources that later patch scripts expect to their clean
-# main-branch form before applying this run's transformations. Gallery is restored by the
-# workflow itself because it has its own known baseline commit.
-subprocess.run(["git", "checkout", "main", "--",
+# The workflow fetches both remote branches but checks out the test branch. Use the
+# explicit remote ref so this works on a fresh GitHub Actions checkout where no local
+# main branch exists. This keeps every generated run based on the known-good main camera,
+# scanner and QR sources.
+subprocess.run(["git", "checkout", "origin/main", "--",
                 "app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt",
                 "app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt",
                 "app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt"], check=True)
@@ -21,8 +21,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
         raise SystemExit(f"{label}: expected exactly 1 match, found {count}")
     return text.replace(old, new, 1)
 
-# CAMERA: one gesture detector owns the preview. Pinch zoom accumulates locally so
-# changing cameraZoom does not restart pointerInput in the middle of a pinch.
 text = MAIN.read_text(encoding="utf-8")
 text = text.replace("import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n", "")
 old_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
@@ -66,14 +64,11 @@ new_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(A
 text = replace_once(text, old_camera, new_camera, "camera gesture block")
 MAIN.write_text(text, encoding="utf-8")
 
-# GALLERY: pinch zoom plus one-finger pan after zooming.
 text = GALLERY.read_text(encoding="utf-8")
 if "import androidx.compose.ui.layout.onSizeChanged" not in text:
     anchor = "import androidx.compose.ui.graphics.graphicsLayer\n"
     if anchor in text:
         text = text.replace(anchor, anchor + "import androidx.compose.ui.layout.onSizeChanged\n", 1)
-    else:
-        text = text.replace("import androidx.compose.ui", "import androidx.compose.ui.layout.onSizeChanged\nimport androidx.compose.ui", 1)
 old_gallery = '''                    bitmap?.let {
                         Box(Modifier.fillMaxSize().pointerInput(uri) {
                             detectTransformGestures { _, _, zoom, _ -> photoZoom = (photoZoom * zoom).coerceIn(1f, 8f) }
@@ -88,40 +83,18 @@ new_gallery = '''                    bitmap?.let {
                         var viewportWidth by remember(uri) { mutableIntStateOf(0) }
                         var viewportHeight by remember(uri) { mutableIntStateOf(0) }
                         Box(
-                            Modifier
-                                .fillMaxSize()
-                                .onSizeChanged { size ->
-                                    viewportWidth = size.width
-                                    viewportHeight = size.height
+                            Modifier.fillMaxSize().onSizeChanged { size -> viewportWidth = size.width; viewportHeight = size.height }.pointerInput(uri) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                    val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
+                                    val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
+                                    photoZoom = newZoom
+                                    if (newZoom <= 1f) { photoPanX = 0f; photoPanY = 0f }
+                                    else { photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX); photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY) }
                                 }
-                                .pointerInput(uri) {
-                                    detectTransformGestures { _, pan, zoom, _ ->
-                                        val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                        val maxPanX = viewportWidth.toFloat() * (newZoom - 1f) / 2f
-                                        val maxPanY = viewportHeight.toFloat() * (newZoom - 1f) / 2f
-                                        photoZoom = newZoom
-                                        if (newZoom <= 1f) {
-                                            photoPanX = 0f
-                                            photoPanY = 0f
-                                        } else {
-                                            photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
-                                            photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                        }
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
+                            }, contentAlignment = Alignment.Center
                         ) {
-                            Image(
-                                it.asImageBitmap(),
-                                "Photo",
-                                Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
-                                    scaleX = photoZoom
-                                    scaleY = photoZoom
-                                    translationX = photoPanX
-                                    translationY = photoPanY
-                                },
-                                contentScale = ContentScale.Fit
-                            )
+                            Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { scaleX = photoZoom; scaleY = photoZoom; translationX = photoPanX; translationY = photoPanY }, contentScale = ContentScale.Fit)
                         }
                     } ?: CircularProgressIndicator(color = Color.White)
 '''
@@ -130,21 +103,9 @@ GALLERY.write_text(text, encoding="utf-8")
 
 main = MAIN.read_text(encoding="utf-8")
 gallery = GALLERY.read_text(encoding="utf-8")
-required = [
-    "detectTransformGestures(panZoomLock = true)",
-    "var gestureZoom = cameraZoom",
-    "gestureZoom = (gestureZoom * zoom)",
-    "var photoPanX by rememberSaveable(uri)",
-    "var photoPanY by rememberSaveable(uri)",
-    "translationX = photoPanX",
-    "translationY = photoPanY",
-    "onSizeChanged { size ->",
-]
+required = ["detectTransformGestures(panZoomLock = true)", "var gestureZoom = cameraZoom", "gestureZoom = (gestureZoom * zoom)", "var photoPanX by rememberSaveable(uri)", "var photoPanY by rememberSaveable(uri)", "translationX = photoPanX", "translationY = photoPanY", "onSizeChanged { size ->"]
 for item in required:
-    if item not in main + gallery:
-        raise SystemExit(f"Required pinch/pan implementation missing: {item}")
-if "detectHorizontalDragGestures" in main:
-    raise SystemExit("Old competing camera horizontal gesture handler remains")
-if "onZoom(cameraZoom * zoom)" in main:
-    raise SystemExit("Old non-accumulating camera zoom implementation remains")
-print("Clean camera/scanner/QR sources restored; pinch zoom + gallery pan implementation applied and audited.")
+    if item not in main + gallery: raise SystemExit(f"Required pinch/pan implementation missing: {item}")
+if "detectHorizontalDragGestures" in main: raise SystemExit("Old competing camera horizontal gesture handler remains")
+if "onZoom(cameraZoom * zoom)" in main: raise SystemExit("Old non-accumulating camera zoom implementation remains")
+print("Clean camera/scanner/QR sources restored from origin/main; pinch zoom + gallery pan implementation applied and audited.")
