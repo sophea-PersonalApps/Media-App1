@@ -13,31 +13,21 @@ def balanced_block(text, start):
         raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
-        if text[i] == "{":
-            depth += 1
+        if text[i] == "{": depth += 1
         elif text[i] == "}":
             depth -= 1
-            if depth == 0:
-                return start, i + 1
+            if depth == 0: return start, i + 1
     raise SystemExit("Unbalanced Kotlin block")
 
 scanner = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner.find("\n@Composable", cap_start + 1)
-if cap_start < 0 or cap_end < 0:
-    raise SystemExit("ScannerCapture function boundary not found")
+if cap_start < 0 or cap_end < 0: raise SystemExit("ScannerCapture function boundary not found")
 cap = scanner[cap_start:cap_end]
-
-# The scanner source already contains the shared CameraSectionControls, but the
-# legacy page-count/shutter/Finish row is immediately before it. Locate the
-# whole bottom Column from the page-count marker rather than depending on
-# generated alignment/padding whitespace.
 page_marker = cap.find('Text("${pages.size} page${if (pages.size == 1) "" else "s"}')
-if page_marker < 0:
-    raise SystemExit("Scanner page-count control not found")
+if page_marker < 0: raise SystemExit("Scanner page-count control not found")
 column_start = cap.rfind("Column(", 0, page_marker)
-if column_start < 0:
-    raise SystemExit("Scanner bottom control Column not found")
+if column_start < 0: raise SystemExit("Scanner bottom control Column not found")
 a, e = balanced_block(cap, column_start)
 replacement = '''Column(
             Modifier
@@ -49,7 +39,7 @@ replacement = '''Column(
                 mode = CameraSectionMode.SCAN,
                 onModeSelected = { scannerModeAction(context, it) },
                 onPrimaryAction = onCapture,
-                onFlip = onFlip,
+                onFlip = onFinish,
                 onMore = { },
                 primaryEnabled = true
             )
@@ -61,9 +51,6 @@ replacement = '''Column(
         }'''
 cap = cap[:a] + replacement + cap[e:]
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
-
-# ScannerActivity's mode-row navigation is reversed for returning to Camera,
-# but forward for opening QR.
 scanner = scanner.replace(
     'CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode)))',
     'CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> { context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode))); (context as? ComponentActivity)?.overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) }')
@@ -74,25 +61,53 @@ SCANNER.write_text(scanner, encoding="utf-8")
 
 main = MAIN.read_text(encoding="utf-8")
 MAIN.write_text(main.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left)'), encoding="utf-8")
-
 qr = QR.read_text(encoding="utf-8")
 QR.write_text(qr.replace('overridePendingTransition(0, 0)', 'overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right)'), encoding="utf-8")
 
-# Gallery pager is the single owner of MediaViewer.
+# Gallery pager owns MediaViewer. Its generated imports are explicit because
+# the pager uses APIs that are not guaranteed by wildcard/transitive imports.
+gallery = GALLERY.read_text(encoding="utf-8")
+imports = [
+    'import androidx.compose.animation.core.Animatable',
+    'import androidx.compose.animation.core.tween',
+    'import androidx.compose.foundation.gestures.detectHorizontalDragGestures',
+    'import androidx.compose.foundation.gestures.detectTransformGestures',
+    'import androidx.compose.ui.draw.zIndex',
+    'import androidx.compose.ui.layout.onSizeChanged',
+    'import kotlinx.coroutines.launch',
+]
+anchor = 'import androidx.compose.foundation.combinedClickable\n'
+for imp in imports:
+    if imp not in gallery:
+        gallery = gallery.replace(anchor, anchor + imp + '\n', 1) if anchor in gallery else gallery
+GALLERY.write_text(gallery, encoding="utf-8")
+
 exec(Path("tools/fix_gallery_pager.py").read_text(encoding="utf-8"), globals())
 
-# Audit the actual generated source.
+# fix_gallery_pager rewrites MediaViewer/imports, so enforce the imports again.
+gallery = GALLERY.read_text(encoding="utf-8")
+for imp in imports:
+    if imp not in gallery:
+        gallery = gallery.replace(anchor, anchor + imp + '\n', 1) if anchor in gallery else gallery
+GALLERY.write_text(gallery, encoding="utf-8")
+
 scanner_final = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner_final.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner_final.find("\n@Composable", cap_start + 1)
+if cap_start < 0 or cap_end < 0: raise SystemExit("Final ScannerCapture boundary not found")
 cap = scanner_final[cap_start:cap_end]
 main_final = MAIN.read_text(encoding="utf-8")
 qr_final = QR.read_text(encoding="utf-8")
 gallery_final = GALLERY.read_text(encoding="utf-8")
 checks = {
-    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap,
+    "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'CameraSectionBottomNavigation(' in cap and 'onPrimaryAction = onCapture' in cap,
+    "scanner PAGES opens preview": 'onFlip = onFinish' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
+    "gallery animation imports": 'import androidx.compose.animation.core.Animatable' in gallery_final and 'import androidx.compose.animation.core.tween' in gallery_final,
+    "gallery gesture imports": 'import androidx.compose.foundation.gestures.detectHorizontalDragGestures' in gallery_final and 'import androidx.compose.foundation.gestures.detectTransformGestures' in gallery_final,
+    "gallery zIndex import": 'import androidx.compose.ui.draw.zIndex' in gallery_final,
+    "gallery coroutine import": 'import kotlinx.coroutines.launch' in gallery_final,
     "gallery interactive pager": 'Animatable' in gallery_final and 'swipeOffset' in gallery_final and 'animateTo' in gallery_final,
     "gallery adjacent media": 'AdjacentMedia(' in gallery_final and 'previousItem' in gallery_final and 'nextItem' in gallery_final,
     "gallery zoom pan": 'detectTransformGestures' in gallery_final and 'photoPanX' in gallery_final and 'photoPanY' in gallery_final,
@@ -100,9 +115,7 @@ checks = {
     "main forward slide": 'R.anim.slide_in_right' in main_final and 'R.anim.slide_out_left' in main_final,
     "qr reverse navigation": 'R.anim.slide_in_left' in qr_final and 'R.anim.slide_out_right' in qr_final,
 }
-for name, ok in checks.items():
-    print(("PASS " if ok else "FAIL ") + name)
+for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
-if failed:
-    raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
+if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
 print("Final gallery/scanner/QR layout audit passed.")
