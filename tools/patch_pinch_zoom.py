@@ -18,6 +18,10 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 text = MAIN.read_text(encoding="utf-8")
 text = text.replace("import androidx.compose.foundation.gestures.detectHorizontalDragGestures\n", "")
+# The baseline property cameraZoom already generates setCameraZoom(Float) on MainActivity.
+# Rename the private helper so it cannot clash with that generated property setter.
+text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
+text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
 old_camera = '''        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
             var drag = 0f
             detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
@@ -54,8 +58,9 @@ text = replace_once(text, old_camera, new_camera, "camera gesture block")
 MAIN.write_text(text, encoding="utf-8")
 
 main = MAIN.read_text(encoding="utf-8")
-for item in ["detectTransformGestures(panZoomLock = true)", "var gestureZoom = cameraZoom", "gestureZoom = (gestureZoom * zoom)"]:
+for item in ["detectTransformGestures(panZoomLock = true)", "var gestureZoom = cameraZoom", "gestureZoom = (gestureZoom * zoom)", "private fun updateCameraZoom(value: Float)"]:
     if item not in main: raise SystemExit(f"Required camera pinch implementation missing: {item}")
 if "detectHorizontalDragGestures" in main: raise SystemExit("Old competing camera horizontal gesture handler remains")
 if "onZoom(cameraZoom * zoom)" in main: raise SystemExit("Old non-accumulating camera zoom implementation remains")
+if "private fun setCameraZoom(value: Float)" in main: raise SystemExit("Conflicting setCameraZoom helper remains")
 print("Clean camera/scanner/QR sources restored from origin/main; camera pinch implementation applied and audited. Gallery is intentionally left to the Gallery pager finalizer.")
