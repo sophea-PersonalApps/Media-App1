@@ -88,6 +88,9 @@ if "import androidx.compose.animation.core.Animatable" not in gallery:
     anchor = "import androidx.compose.foundation.gestures.detectTransformGestures\n"
     if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\n", 1)
     else: gallery = gallery.replace("import androidx.compose.foundation", "import androidx.compose.animation.core.Animatable\nimport androidx.compose.animation.core.tween\nimport androidx.compose.foundation", 1)
+if "import androidx.compose.runtime.rememberCoroutineScope" not in gallery:
+    anchor = "import androidx.compose.runtime.rememberSaveable\n"
+    if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import androidx.compose.runtime.rememberCoroutineScope\n", 1)
 if ".zIndex(10f)" not in gallery:
     gallery = replace_once(gallery, "Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {", "Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {", "gallery action row")
 state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
@@ -95,6 +98,7 @@ if "val swipeOffset = remember" not in gallery:
     if state_marker not in gallery: raise SystemExit("gallery viewport state not found")
     gallery = gallery.replace(state_marker, state_marker + '''
                         val swipeOffset = remember { Animatable(0f) }
+                        val swipeScope = rememberCoroutineScope()
                         val previousUri = if (currentIndex > 0) items[currentIndex - 1].uri else null
                         val nextUri = if (currentIndex >= 0 && currentIndex < items.lastIndex) items[currentIndex + 1].uri else null
                         var previousBitmap by remember(currentIndex) { mutableStateOf<Bitmap?>(null) }
@@ -124,12 +128,12 @@ if old_gesture_start in gallery:
                                             photoPanY = 0f
                                             if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                                                 val maxOffset = viewportWidth.toFloat()
-                                                launch { swipeOffset.snapTo((swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset)) }
+                                                swipeScope.launch { swipeOffset.snapTo((swipeOffset.value + pan.x).coerceIn(-maxOffset, maxOffset)) }
                                             }
                                         } else {
                                             photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
                                             photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                            launch { swipeOffset.snapTo(0f) }
+                                            swipeScope.launch { swipeOffset.snapTo(0f) }
                                         }
                                     }
                                     val threshold = viewportWidth.toFloat() * 0.5f
@@ -191,5 +195,5 @@ checks = {
 }
 for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
-if failed: raise SystemExit("FINAL UI AUDIT FAILED: "; ".join(failed))
+if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
 GALLERY.write_text(gallery, encoding="utf-8")
