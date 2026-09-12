@@ -109,6 +109,16 @@ jobs:
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
           scanner = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
           qr = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt").read_text(encoding="utf-8")
+
+          def composable_block(text, signature):
+              start = text.find(signature)
+              if start < 0: raise SystemExit(f"Missing composable: {signature}")
+              end = text.find("\n@Composable", start + len(signature))
+              return text[start:end if end >= 0 else len(text)]
+
+          scanner_capture = composable_block(scanner, "@Composable\nprivate fun ScannerCapture(")
+          qr_capture = composable_block(qr, "@Composable\nprivate fun QrScannerScreen(")
+
           checks = {
               "camera transform gesture": "detectTransformGestures(panZoomLock = true)" in main,
               "camera accumulated zoom state": "var gestureZoom = cameraZoom" in main,
@@ -129,17 +139,16 @@ jobs:
               "gallery video swipe": "currentIndex < items.lastIndex" in gallery,
               "gallery photo pan preserved": "var photoPanX by rememberSaveable(uri)" in gallery and "translationY = photoPanY" in gallery,
               "gallery swipe import": "import androidx.compose.foundation.gestures.detectHorizontalDragGestures" in gallery,
-              "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
-              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "ScannerSectionControls:" in scanner and 'Text("MORE"' in scanner and 'Text("PAGES ${pages.size}"' in scanner and "onCapture" in scanner,
-              "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner,
-              "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
+              "scanner capture header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner_capture and "IconButton(onClick = onBack)" not in scanner_capture,
+              "scanner shared controls": "mode = CameraSectionMode.SCAN" in scanner_capture and "onFlip = onFinish" in scanner_capture and 'Text("MORE"' in scanner_capture and 'Text("PAGES' in scanner_capture,
+              "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner_capture,
+              "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr_capture,
+              "QR capture top back removed": "Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)" not in qr_capture,
               "scanner and QR forward animations": "R.anim.slide_in_right" in main and "R.anim.slide_in_right" in scanner and "R.anim.slide_in_left" in qr,
               "gallery interactive swipe": "swipeOffset" in gallery and "snapTo" in gallery,
-              "gallery adjacent photo": "previousBitmap" in gallery and "nextBitmap" in gallery,
+              "gallery adjacent media": "AdjacentMedia(" in gallery and "previousItem" in gallery and "nextItem" in gallery,
               "gallery continuous swipe animation": "tween(180)" in gallery and "animateTo" in gallery,
               "gallery action row above media": ".zIndex(10f)" in gallery,
-              "scanner top-left back removed": "Back to scanner" not in scanner,
-              "QR top-left back removed": "Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)" not in qr,
           }
           failed = [name for name, ok in checks.items() if not ok]
           for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
