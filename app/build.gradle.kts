@@ -48,6 +48,7 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview:$composeVersion")
     implementation("androidx.compose.material3:material3:1.3.2")
     implementation("androidx.compose.material:material-icons-extended:$composeVersion")
+    implementation("androidx.compose.animation:animation:$composeVersion")
     debugImplementation("androidx.compose.ui:ui-tooling:$composeVersion")
 
     implementation("androidx.camera:camera-camera2:$cameraxVersion")
