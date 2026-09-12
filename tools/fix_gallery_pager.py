@@ -27,6 +27,10 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
+        // Warm the two destinations before the user asks for them.
+        listOfNotNull(previousItem, nextItem).forEach { item ->
+            withContext(Dispatchers.IO) { loadFullImage(context, item.uri) }
+        }
     }
 
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
@@ -107,9 +111,7 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                     if (isVideo) {
                         VideoPlayer(uri, videoSpeed)
                     } else {
-                        var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
-                        LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
-                        bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = photoPanX; translationY = photoPanY }, contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(color = Color.White)
+                        CachedFullImage(uri, context, photoPanX, photoPanY)
                     }
                 }
                 if (nextItem != null) {
@@ -119,6 +121,15 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         }
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
     }
+}
+
+@Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri)) }
+    LaunchedEffect(uri) {
+        if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
+    }
+    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
+        ?: CircularProgressIndicator(color = Color.White)
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
@@ -134,4 +145,4 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 '''
 text = text[:start] + new_viewer + text[end:]
 path.write_text(text, encoding="utf-8")
-print("Replaced MediaViewer with a compile-safe full-item pager for photos and videos.")
+print("Replaced MediaViewer with preloaded full-image neighbors and cached current photos.")
