@@ -130,7 +130,7 @@ jobs:
               "gallery photo pan preserved": "var photoPanX by rememberSaveable(uri)" in gallery and "translationY = photoPanY" in gallery,
               "gallery swipe import": "import androidx.compose.foundation.gestures.detectHorizontalDragGestures" in gallery,
               "scanner header removed": "Text(\"Scanner\", color = ComposeColor.White" not in scanner,
-              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "ScannerSectionControls(" in scanner,
+              "scanner bottom controls": ".align(Alignment.BottomCenter)" in scanner and "ScannerSectionControls:" in scanner and 'Text("MORE"' in scanner and 'Text("PAGES ${pages.size}"' in scanner and "onCapture" in scanner,
               "scanner bottom navigation": "CameraSectionBottomNavigation(" in scanner,
               "QR header removed": "Text(\"QR SCANNER\", color = Color.White" not in qr,
               "scanner and QR forward animations": "R.anim.slide_in_right" in main and "R.anim.slide_in_right" in scanner and "R.anim.slide_in_left" in qr,
