@@ -451,14 +451,8 @@ private fun CameraScreen(
                 } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                     horizontalDrag += pan.x
                     when {
-                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> {
-                            onModeChanged(modes[selectedIndex + 1])
-                            horizontalDrag = 0f
-                        }
-                        horizontalDrag >= 80f && selectedIndex > 0 -> {
-                            onModeChanged(modes[selectedIndex - 1])
-                            horizontalDrag = 0f
-                        }
+                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> { onModeChanged(modes[selectedIndex + 1]); horizontalDrag = 0f }
+                        horizontalDrag >= 80f && selectedIndex > 0 -> { onModeChanged(modes[selectedIndex - 1]); horizontalDrag = 0f }
                     }
                 }
             }

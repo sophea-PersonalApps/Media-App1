@@ -199,7 +199,8 @@ private fun QrScannerScreen(
             Box(Modifier.fillMaxSize().background(Color.Black)) {
                 AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
                 QrFinderOverlay()
-                                if (result == null) {
+                IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart).statusBarsPadding().padding(8.dp)) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+                if (result == null) {
                     Column(Modifier.align(Alignment.BottomCenter)) {
                         CameraSectionControls(mode = CameraSectionMode.QR, onModeSelected = {
                             when (it) {

@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,7 +54,6 @@ import androidx.compose.material.icons.filled.FlipCameraAndroid
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -157,10 +155,10 @@ class ScannerActivity : ComponentActivity() {
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
                     onSave = ::savePdf,
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) },
-                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
+                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(0, 0) }
                 )
             }
         }
@@ -386,9 +384,9 @@ private fun ScannerPermission(onRequest: () -> Unit, onBack: () -> Unit) {
 
 private fun scannerModeAction(context: android.content.Context, mode: CameraSectionMode) {
     when (mode) {
-        CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode)))
+        CameraSectionMode.PHOTO, CameraSectionMode.VIDEO -> { context.startActivity(Intent(context, MainActivity::class.java).putExtras(cameraModeIntent(mode))); (context as? ComponentActivity)?.overridePendingTransition(R.anim.slide_in_left, R.anim.slide_out_right) }
         CameraSectionMode.SCAN -> Unit
-        CameraSectionMode.QR -> context.startActivity(Intent(context, QrScannerActivity::class.java))
+        CameraSectionMode.QR -> { context.startActivity(Intent(context, QrScannerActivity::class.java)); (context as? ComponentActivity)?.overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
     }
 }
 
@@ -401,80 +399,27 @@ private fun ScannerCapture(
     Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {
         AndroidView(factory = { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FIT_CENTER; implementationMode = PreviewView.ImplementationMode.PERFORMANCE; onPreviewReady(this) } }, modifier = Modifier.fillMaxSize())
         ScannerPageGuide(detectedQuad)
-        Column(
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
+            Column(
             Modifier
-                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(ComposeColor.Black.copy(alpha = 0.82f))
                 .navigationBarsPadding()
-                .padding(10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-                if (pages.isNotEmpty()) {
-                    LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        itemsIndexed(pages) { index, path ->
-                            Box(Modifier.size(68.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) { Icon(Icons.Default.Delete, "Remove page", tint = ComposeColor.White) } }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.White, modifier = Modifier.padding(end = 18.dp))
-                    Box(Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) { Box(Modifier.size(58.dp).background(ComposeColor.Black, CircleShape)) }
-                    Spacer(Modifier.size(18.dp)); Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
-                }
-                Spacer(Modifier.height(8.dp))
-                // ScannerSectionControls: MORE | shutter | PAGES
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 22.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable { }) {
-                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.MoreVert, "More", tint = ComposeColor.White)
-                        }
-                        Text("MORE", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Box(
-                        Modifier.size(72.dp)
-                            .background(ComposeColor.White, CircleShape)
-                            .padding(5.dp)
-                            .clickable(onClick = onCapture),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(Modifier.size(58.dp).background(ComposeColor.White, CircleShape))
-                    }
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier.clickable(enabled = pages.isNotEmpty(), onClick = onFinish)
-                    ) {
-                        Box(Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                            Icon(Icons.Default.Folder, "Pages", tint = ComposeColor.White)
-                        }
-                        Text("PAGES ${pages.size}", color = ComposeColor.White, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-                    }
-                }/* CameraSectionBottomNavigation( replacement: keep the shared CAMERA/GALLERY behavior inline. */
-                Row(
-                    Modifier.fillMaxWidth().background(ComposeColor.Black).height(58.dp).navigationBarsPadding(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "CAMERA",
-                        color = ComposeColor.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable(onClick = onOpenCamera).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                    Text(
-                        "GALLERY",
-                        color = ComposeColor.White.copy(alpha = 0.55f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        modifier = Modifier.clickable(onClick = onOpenGallery).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }
+            CameraSectionControls(
+                mode = CameraSectionMode.SCAN,
+                onModeSelected = { scannerModeAction(context, it) },
+                onPrimaryAction = onCapture,
+                onFlip = onFinish,
+                onMore = { },
+                primaryEnabled = true
+            )
+            CameraSectionBottomNavigation(
+                cameraSelected = true,
+                onCamera = onOpenCamera,
+                onGallery = onOpenGallery
+            )
+        }
         }
     }
 }
@@ -486,7 +431,8 @@ private fun ScannerPreview(
 ) {
     Column(Modifier.fillMaxSize().background(ComposeColor.Black).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("Preview", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.LightGray)
+            IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back to scanner", tint = ComposeColor.White) }
+            Text("Preview", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.LightGray)
         }
         LazyRow(Modifier.fillMaxWidth().height(94.dp).padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             itemsIndexed(pages) { index, path -> Box(Modifier.size(86.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(27.dp)) { Icon(Icons.Default.Delete, "Delete page", tint = ComposeColor.White) } } }
@@ -497,27 +443,7 @@ private fun ScannerPreview(
                 Icon(Icons.Default.Folder, "PDF folder", tint = ComposeColor.White); Spacer(Modifier.size(8.dp)); Text(folderName, color = ComposeColor.White, maxLines = 1, modifier = Modifier.weight(1f)); Button(onClick = onChooseFolder) { Text("Choose") }
             }
             Spacer(Modifier.height(10.dp)); Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) { Icon(Icons.Default.PictureAsPdf, "Save PDF"); Spacer(Modifier.size(8.dp)); Text("Save PDF") }
-            Spacer(Modifier.height(8.dp)); /* CameraSectionBottomNavigation( replacement: keep the shared CAMERA/GALLERY behavior inline. */
-                Row(
-                    Modifier.fillMaxWidth().background(ComposeColor.Black).height(58.dp).navigationBarsPadding(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "CAMERA",
-                        color = ComposeColor.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.clickable(onClick = onOpenCamera).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                    Text(
-                        "GALLERY",
-                        color = ComposeColor.White.copy(alpha = 0.55f),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Normal,
-                        modifier = Modifier.clickable(onClick = onOpenGallery).padding(horizontal = 20.dp, vertical = 8.dp)
-                    )
-                }
+            Spacer(Modifier.height(8.dp)); CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
         }
     }
 }
