@@ -12,11 +12,10 @@ def replace_once(text, old, new, label):
     if n == 0 and new in text: return text
     raise SystemExit(f"{label}: expected 1 match, found {n}")
 
-# Scanner must use the exact same shared camera chrome as Camera/Video. The only
-# mode-specific difference is that CameraSectionControls itself renders PAGES in
-# the right-hand action position when mode == SCAN. Remove the scanner's old
-# duplicate page-count/shutter/finish row so it cannot shrink the camera preview.
 scanner = SCANNER.read_text(encoding="utf-8")
+main = MAIN.read_text(encoding="utf-8")
+qr = QR.read_text(encoding="utf-8")
+
 old_duplicate = '''            Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 if (pages.isNotEmpty()) {
                     LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -56,7 +55,6 @@ new_shared = '''            Column(Modifier.fillMaxWidth().background(ComposeCol
             }
 '''
 scanner = replace_once(scanner, old_duplicate, new_shared, "scanner duplicate capture controls")
-# Remove the capture-screen top header if it survived an earlier patch.
 scanner = scanner.replace('''            Row(Modifier.fillMaxWidth().statusBarsPadding().padding(8.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = ComposeColor.White) }
                 Text("Scanner", color = ComposeColor.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold)
@@ -65,9 +63,6 @@ scanner = scanner.replace('''            Row(Modifier.fillMaxWidth().statusBarsP
 ''', '')
 SCANNER.write_text(scanner, encoding="utf-8")
 
-# Keep the existing successful gallery pager implementation, but make its gesture
-# semantics explicit: at zoom 1 a horizontal drag is a page gesture; release can
-# only return to the current page or complete exactly one adjacent-page move.
 gallery = GALLERY.read_text(encoding="utf-8")
 if "import androidx.compose.ui.zIndex" not in gallery:
     gallery = replace_once(gallery, "import androidx.compose.ui.viewinterop.AndroidView\n", "import androidx.compose.ui.viewinterop.AndroidView\nimport androidx.compose.ui.zIndex\n", "gallery zIndex import")
@@ -83,8 +78,6 @@ if "import kotlinx.coroutines.launch" not in gallery:
     if anchor in gallery: gallery = gallery.replace(anchor, anchor + "import kotlinx.coroutines.launch\n", 1)
 if ".zIndex(10f)" not in gallery:
     gallery = replace_once(gallery, "Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {", "Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {", "gallery action row")
-# The pager state is generated here only if the earlier UI patch did not already
-# provide it. Do not duplicate an existing implementation.
 state_marker = "var viewportHeight by remember(uri) { mutableIntStateOf(0) }"
 if "val swipeOffset = remember" not in gallery:
     if state_marker not in gallery: raise SystemExit("gallery viewport state not found")
@@ -173,7 +166,6 @@ if single_image in gallery:
                                 Image(next.asImageBitmap(), "Next photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() }, contentScale = ContentScale.Fit)
                             }''', 1)
 
-# Keep the audit aligned with the actual shared-controls implementation.
 checks = {
     "scanner shared controls": "CameraSectionControls(" in scanner and "CameraSectionBottomNavigation(" in scanner and 'mode = CameraSectionMode.SCAN' in scanner and 'onFlip = onFinish' in scanner,
     "scanner duplicate row removed": 'Text("Finish")' not in scanner and 'Text("${pages.size} page' not in scanner,
