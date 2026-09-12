@@ -11,15 +11,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 text = GALLERY.read_text(encoding="utf-8")
-
-# ALBUM TRANSITION: clear the old gallery list immediately when an album is
-# selected, and show a loading state while its MediaStore query completes.
-text = replace_once(
-    text,
-    '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n',
-    '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var mediaLoading by remember { mutableStateOf(false) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n',
-    "media loading state",
-)
+text = replace_once(text, '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n', '    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }\n    var mediaLoading by remember { mutableStateOf(false) }\n    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }\n', "media loading state")
 old_effect = '''    LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
         else if (selectedAlbumId != null) media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
@@ -39,12 +31,7 @@ new_effect = '''    LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
     }
 '''
 text = replace_once(text, old_effect, new_effect, "media loading effect")
-text = replace_once(
-    text,
-    'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }',
-    'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> media = emptyList(); selectedAlbumId = album.id; selectedAlbumName = album.name }',
-    "album selection clears stale media",
-)
+text = replace_once(text, 'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }', 'if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> media = emptyList(); selectedAlbumId = album.id; selectedAlbumName = album.name }', "album selection clears stale media")
 old_grid = '''            if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
             else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
 '''
@@ -53,10 +40,6 @@ new_grid = '''            if (unavailable && selectedAlbumId == null) MissingMed
             else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
 '''
 text = replace_once(text, old_grid, new_grid, "album loading display")
-
-# VIDEO ACTION: make Speed a real IconButton in the same top action-bar
-# position as Edit is for photos. The viewer already renders this Row before
-# the VideoPlayer Box, so the controls are naturally above the video layer.
 if 'import androidx.compose.material.icons.filled.Speed' not in text:
     text = replace_once(text, 'import androidx.compose.material.icons.filled.Share\n', 'import androidx.compose.material.icons.filled.Share\nimport androidx.compose.material.icons.filled.Speed\n', "speed icon import")
 old_speed = '''                if (isVideo) {
@@ -82,7 +65,6 @@ new_speed = '''                if (isVideo) {
                 } else {
 '''
 text = replace_once(text, old_speed, new_speed, "video speed icon action")
-
 checks = {
     "album loading state": 'var mediaLoading by remember { mutableStateOf(false) }' in text,
     "album query loading": 'mediaLoading = true' in text and 'mediaLoading = false' in text,
@@ -95,9 +77,7 @@ checks = {
     "old text speed action removed": 'TextButton(onClick = { speedMenuOpen = true }) { Text("${videoSpeed}x"' not in text,
 }
 failed = [name for name, ok in checks.items() if not ok]
-for name, ok in checks.items():
-    print(("PASS " if ok else "FAIL ") + name)
-if failed:
-    raise SystemExit("GALLERY UI AUDIT FAILED: " + "; ".join(failed))
+for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
+if failed: raise SystemExit("GALLERY UI AUDIT FAILED: " + "; ".join(failed))
 GALLERY.write_text(text, encoding="utf-8")
 print("Album transition flash removed and video viewer Speed action is an icon button.")
