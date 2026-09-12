@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
 text = path.read_text(encoding="utf-8")
@@ -28,26 +27,6 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
-    }
-
-    fun navigateAfterSwipe(drag: Float) {
-        if (viewportWidth <= 0) return
-        val threshold = minOf(140f, viewportWidth * 0.22f)
-        val target = when {
-            drag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
-            drag >= threshold && currentIndex > 0 -> currentIndex - 1
-            else -> -1
-        }
-        swipeScope.launch {
-            if (target >= 0) {
-                val destination = if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat()
-                swipeOffset.animateTo(destination, tween(180))
-                onNavigate(target)
-                swipeOffset.snapTo(0f)
-            } else {
-                swipeOffset.animateTo(0f, tween(160))
-            }
-        }
     }
 
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
@@ -80,7 +59,6 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                 Box(
                     Modifier.fillMaxSize().graphicsLayer {
                         translationX = if (photoZoom <= 1f) swipeOffset.value else 0f
-                        translationY = photoPanY
                         scaleX = if (isVideo) 1f else photoZoom
                         scaleY = if (isVideo) 1f else photoZoom
                     }.pointerInput(uri, currentIndex, isVideo, photoZoom) {
@@ -89,10 +67,29 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                             detectHorizontalDragGestures(
                                 onHorizontalDrag = { _, amount ->
                                     dragX += amount
-                                    val maxOffset = viewportWidth.toFloat()
-                                    swipeScope.launch { swipeOffset.snapTo((dragX).coerceIn(-maxOffset, maxOffset)) }
+                                    swipeScope.launch { swipeOffset.snapTo(dragX.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
                                 },
-                                onDragEnd = { navigateAfterSwipe(dragX); dragX = 0f },
+                                onDragEnd = {
+                                    if (viewportWidth > 0) {
+                                        val threshold = minOf(140f, viewportWidth * 0.22f)
+                                        val target = when {
+                                            dragX <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                            dragX >= threshold && currentIndex > 0 -> currentIndex - 1
+                                            else -> -1
+                                        }
+                                        swipeScope.launch {
+                                            if (target >= 0) {
+                                                val destination = if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat()
+                                                swipeOffset.animateTo(destination, tween(180))
+                                                onNavigate(target)
+                                                swipeOffset.snapTo(0f)
+                                            } else {
+                                                swipeOffset.animateTo(0f, tween(160))
+                                            }
+                                        }
+                                    }
+                                    dragX = 0f
+                                },
                                 onDragCancel = { dragX = 0f; swipeScope.launch { swipeOffset.animateTo(0f, tween(160)) } }
                             )
                         } else {
@@ -112,7 +109,7 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                     } else {
                         var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
                         LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
-                        bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = if (photoZoom <= 1f) 0f else photoPanX }, contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(color = Color.White)
+                        bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = photoPanX; translationY = photoPanY }, contentScale = ContentScale.Fit) } ?: CircularProgressIndicator(color = Color.White)
                     }
                 }
                 if (nextItem != null) {
@@ -125,17 +122,16 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
-    val bitmap = remember(item.uri, item.isVideo) { ThumbnailMemoryCache.get(item.uri, item.isVideo) }
-    var loaded by remember(item.uri, item.isVideo) { mutableStateOf(bitmap) }
+    var bitmap by remember(item.uri, item.isVideo) { mutableStateOf(ThumbnailMemoryCache.get(item.uri, item.isVideo)) }
     LaunchedEffect(item.uri, item.isVideo) {
-        if (loaded == null) loaded = withContext(Dispatchers.IO) { loadThumbnail(context, item.uri, item.isVideo) }
+        if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, item.uri, item.isVideo) }
     }
     Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-        loaded?.let { Image(it.asImageBitmap(), item.name, Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
+        bitmap?.let { Image(it.asImageBitmap(), item.name, Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
     }
 }
 
 '''
 text = text[:start] + new_viewer + text[end:]
 path.write_text(text, encoding="utf-8")
-print("Replaced MediaViewer with a full-item pager for photos and videos.")
+print("Replaced MediaViewer with a compile-safe full-item pager for photos and videos.")
