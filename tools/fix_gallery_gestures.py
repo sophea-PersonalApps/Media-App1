@@ -11,6 +11,16 @@ text = text.replace(
     1,
 )
 
+# The pointer-event scope is a restricted suspension scope: Animatable.snapTo/
+# animateTo cannot be called from inside it. Use Compose state for the direct
+# finger-following drag, and reserve Animatable for the one final page animation.
+text = text.replace(
+    "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    val swipeOffset = remember { Animatable(0f) }",
+    "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    var dragOffset by remember { mutableFloatStateOf(0f) }\n    val swipeOffset = remember { Animatable(0f) }",
+    1,
+)
+text = text.replace("        swipeOffset.snapTo(0f)\n        mediaZoom = 1f", "        dragOffset = 0f\n        mediaZoom = 1f", 1)
+
 old_gesture = '''                        var horizontalDrag = 0f
                         var navigationStarted = false
                         detectTransformGestures(panZoomLock = false) { _, pan, zoom, _ ->
@@ -66,7 +76,7 @@ new_gesture = '''                        var horizontalDrag = 0f
                                 if (zoom < 1f || wasZoomed || pointerCount > 1) horizontalDrag = 0f
                                 if (!navigationStarted && pointerCount == 1 && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                                     horizontalDrag += pan.x
-                                    swipeOffset.snapTo(horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat()))
+                                    dragOffset = horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
                                     val threshold = minOf(140f, viewportWidth * 0.22f)
                                     val target = when {
                                         horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
@@ -75,9 +85,15 @@ new_gesture = '''                        var horizontalDrag = 0f
                                     }
                                     if (target >= 0) {
                                         navigationStarted = true
-                                        swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
-                                        onNavigate(target)
-                                        swipeOffset.snapTo(0f)
+                                        swipeScope.launch {
+                                            val navigationAnim = Animatable(dragOffset)
+                                            navigationAnim.animateTo(
+                                                if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(),
+                                                tween(180)
+                                            ) { dragOffset = value }
+                                            onNavigate(target)
+                                            dragOffset = 0f
+                                        }
                                     }
                                 }
                             }
@@ -87,8 +103,13 @@ if old_gesture not in text:
     raise SystemExit("Gallery gesture block not found")
 text = text.replace(old_gesture, new_gesture, 1)
 
+# Replace only the pager translations; leave the audit Animatable declaration intact.
+text = text.replace("translationX = swipeOffset.value - viewportWidth.toFloat()", "translationX = dragOffset - viewportWidth.toFloat()")
+text = text.replace("translationX = if (mediaZoom <= 1f) swipeOffset.value else mediaPanX", "translationX = if (mediaZoom <= 1f) dragOffset else mediaPanX")
+text = text.replace("translationX = swipeOffset.value + viewportWidth.toFloat()", "translationX = dragOffset + viewportWidth.toFloat()")
+
 helper_marker = "@Composable private fun CachedFullImage"
-helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: suspend (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
+helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
     awaitPointerEventScope {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -123,10 +144,16 @@ helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures
 '''
 if helper_marker not in text:
     raise SystemExit("CachedFullImage marker not found")
-if "private suspend fun PointerInputScope.detectGalleryTransformGestures" not in text:
+# Replace the previous helper regardless of its old callback signature.
+helper_start = text.find("private suspend fun PointerInputScope.detectGalleryTransformGestures")
+if helper_start >= 0:
+    helper_end = text.find(helper_marker, helper_start)
+    if helper_end < 0:
+        raise SystemExit("Existing gallery gesture helper boundary not found")
+    text = text[:helper_start] + helper + text[helper_end:]
+else:
     text = text.replace(helper_marker, helper + helper_marker, 1)
 
-# Compose 1.7.8 places these gesture-await helpers in foundation.gestures.
 imports = [
     "import androidx.compose.ui.geometry.Offset",
     "import androidx.compose.ui.input.pointer.PointerEventPass",
@@ -140,4 +167,4 @@ for line in imports:
         text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery gesture helper fixed for Compose 1.7.8: correct gesture imports and suspend callback, while preserving continuous pinch and initial-pass video/photo swiping.")
+print("Gallery gesture helper fixed: direct drag now uses Compose state outside Animatable's restricted suspension APIs; Animatable remains only for the final full-page transition. Continuous pinch and initial-pass video/photo swiping are preserved.")
