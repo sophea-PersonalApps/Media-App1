@@ -3,17 +3,12 @@ from pathlib import Path
 path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
 text = path.read_text(encoding="utf-8")
 
-# Keep the pointerInput instance alive while mediaZoom changes. Recreating it
-# on every zoom update was cancelling continuous pinches.
 text = text.replace(
     ".pointerInput(uri, currentIndex, isVideo, mediaZoom) {",
     ".pointerInput(uri, currentIndex, isVideo) {",
     1,
 )
 
-# The pointer-event scope is a restricted suspension scope: Animatable.snapTo/
-# animateTo cannot be called from inside it. Use Compose state for the direct
-# finger-following drag, and reserve Animatable for the one final page animation.
 text = text.replace(
     "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    val swipeOffset = remember { Animatable(0f) }",
     "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    var dragOffset by remember { mutableFloatStateOf(0f) }\n    val swipeOffset = remember { Animatable(0f) }",
@@ -103,15 +98,14 @@ if old_gesture not in text:
     raise SystemExit("Gallery gesture block not found")
 text = text.replace(old_gesture, new_gesture, 1)
 
-# Replace only the pager translations; leave the audit Animatable declaration intact.
 text = text.replace("translationX = swipeOffset.value - viewportWidth.toFloat()", "translationX = dragOffset - viewportWidth.toFloat()")
 text = text.replace("translationX = if (mediaZoom <= 1f) swipeOffset.value else mediaPanX", "translationX = if (mediaZoom <= 1f) dragOffset else mediaPanX")
 text = text.replace("translationX = swipeOffset.value + viewportWidth.toFloat()", "translationX = dragOffset + viewportWidth.toFloat()")
 
 helper_marker = "@Composable private fun CachedFullImage"
 helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
-    awaitPointerEventScope {
-        awaitEachGesture {
+    awaitEachGesture {
+        awaitPointerEventScope {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             var previousCentroid = Offset.Zero
             var previousSpan = 0f
@@ -144,7 +138,6 @@ helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures
 '''
 if helper_marker not in text:
     raise SystemExit("CachedFullImage marker not found")
-# Replace the previous helper regardless of its old callback signature.
 helper_start = text.find("private suspend fun PointerInputScope.detectGalleryTransformGestures")
 if helper_start >= 0:
     helper_end = text.find(helper_marker, helper_start)
@@ -167,4 +160,4 @@ for line in imports:
         text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery gesture helper fixed: direct drag now uses Compose state outside Animatable's restricted suspension APIs; Animatable remains only for the final full-page transition. Continuous pinch and initial-pass video/photo swiping are preserved.")
+print("Gallery gesture helper fixed: restricted pointer-event scope is now nested inside awaitEachGesture; direct drag uses Compose state and Animatable remains only for the final page transition.")
