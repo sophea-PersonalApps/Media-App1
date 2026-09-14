@@ -104,8 +104,8 @@ text = text.replace("translationX = swipeOffset.value + viewportWidth.toFloat()"
 
 helper_marker = "@Composable private fun CachedFullImage"
 helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
-    awaitEachGesture {
-        awaitPointerEventScope {
+    awaitPointerEventScope {
+        while (true) {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
             var previousCentroid = Offset.Zero
             var previousSpan = 0f
@@ -151,7 +151,6 @@ imports = [
     "import androidx.compose.ui.geometry.Offset",
     "import androidx.compose.ui.input.pointer.PointerEventPass",
     "import androidx.compose.ui.input.pointer.PointerInputScope",
-    "import androidx.compose.foundation.gestures.awaitEachGesture",
     "import androidx.compose.foundation.gestures.awaitFirstDown",
     "import androidx.compose.ui.input.pointer.positionChanged",
 ]
@@ -160,4 +159,4 @@ for line in imports:
         text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery gesture helper fixed: restricted pointer-event scope is now nested inside awaitEachGesture; direct drag uses Compose state and Animatable remains only for the final page transition.")
+print("Gallery gesture helper fixed: pointer-event handling stays inside the allowed pointer scope; direct drag uses Compose state and Animatable is used only for the final page transition.")
