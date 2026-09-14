@@ -2,6 +2,24 @@ from pathlib import Path
 
 path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
 text = path.read_text(encoding="utf-8")
+
+# The workflow intentionally restores GalleryActivity to a known-good baseline before
+# applying the gallery patches. Keep the full-image cache in this finalizer so the
+# generated pager never depends on another patch having run first.
+cache_marker = "private object ThumbnailMemoryCache {"
+if cache_marker not in text:
+    raise SystemExit("ThumbnailMemoryCache not found")
+if "fun getFull(uri: Uri)" not in text:
+    old_cache_end = '    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }\n}'
+    new_cache_end = '''    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+    private const val FULL_PREFIX = "full|"
+    fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
+    fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
+}'''
+    if old_cache_end not in text:
+        raise SystemExit("ThumbnailMemoryCache insertion point not found")
+    text = text.replace(old_cache_end, new_cache_end, 1)
+
 start = text.find("@Composable private fun MediaViewer(")
 end = text.find("@Composable private fun VideoPlayer(", start)
 if start < 0 or end < 0:
@@ -27,7 +45,7 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
-        // Warm adjacent photos in parallel, without blocking the current image.
+        // Warm adjacent photos without blocking the current item.
         listOfNotNull(previousItem, nextItem).filter { !it.isVideo && ThumbnailMemoryCache.getFull(it.uri) == null }.forEach { item ->
             swipeScope.launch(Dispatchers.IO) {
                 loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
@@ -134,7 +152,7 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 }
 
 @Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
-    // Paint the existing thumbnail immediately, then replace it with the full image when decoding finishes.
+    // Show the already-cached thumbnail immediately, then replace it with the full image.
     var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri) ?: ThumbnailMemoryCache.get(uri, false)) }
     LaunchedEffect(uri) {
         ThumbnailMemoryCache.getFull(uri)?.let { bitmap = it; return@LaunchedEffect }
@@ -161,4 +179,4 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 '''
 text = text[:start] + new_viewer + text[end:]
 path.write_text(text, encoding="utf-8")
-print("Gallery pager updated: pinch zoom is active from 1x, one-finger horizontal photo swipes remain live at 1x, adjacent images stay visible during the swipe, and cached thumbnails prevent a loading spinner while the full image decodes.")
+print("Gallery pager updated: full-image cache is self-contained, cached thumbnails render immediately, pinch zoom works from 1x, one-finger photo swipes remain live at 1x, and adjacent media stays visible during swipes.")
