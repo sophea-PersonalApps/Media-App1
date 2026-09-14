@@ -8,25 +8,31 @@ QR = ROOT / "QrScannerActivity.kt"
 GALLERY = ROOT / "GalleryActivity.kt"
 
 def balanced_block(text, start):
-    op = text.find("{")
-    if op < 0: raise SystemExit("Could not find opening brace")
+    op = text.find("{", start)
+    if op < 0:
+        raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
-        if text[i] == "{": depth += 1
+        if text[i] == "{":
+            depth += 1
         elif text[i] == "}":
             depth -= 1
-            if depth == 0: return start, i + 1
+            if depth == 0:
+                return start, i + 1
     raise SystemExit("Unbalanced Kotlin block")
 
 scanner = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner.find("\n@Composable", cap_start + 1)
-if cap_start < 0 or cap_end < 0: raise SystemExit("ScannerCapture function boundary not found")
+if cap_start < 0 or cap_end < 0:
+    raise SystemExit("ScannerCapture function boundary not found")
 cap = scanner[cap_start:cap_end]
 page_marker = cap.find('Text("${pages.size} page${if (pages.size == 1) "" else "s"}')
-if page_marker < 0: raise SystemExit("Scanner page-count control not found")
+if page_marker < 0:
+    raise SystemExit("Scanner page-count control not found")
 box_start = cap.find('    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {')
-if box_start < 0: raise SystemExit("ScannerCapture outer Box not found")
+if box_start < 0:
+    raise SystemExit("ScannerCapture outer Box not found")
 box_a, box_e = balanced_block(cap, box_start)
 replacement = '''Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -95,7 +101,8 @@ GALLERY.write_text(gallery, encoding="utf-8")
 scanner_final = SCANNER.read_text(encoding="utf-8")
 cap_start = scanner_final.find("@Composable\nprivate fun ScannerCapture(")
 cap_end = scanner_final.find("\n@Composable", cap_start + 1)
-if cap_start < 0 or cap_end < 0: raise SystemExit("Final ScannerCapture boundary not found")
+if cap_start < 0 or cap_end < 0:
+    raise SystemExit("Final ScannerCapture boundary not found")
 cap = scanner_final[cap_start:cap_end]
 main_final = MAIN.read_text(encoding="utf-8")
 qr_final = QR.read_text(encoding="utf-8")
@@ -119,7 +126,9 @@ checks = {
     "main forward slide": 'R.anim.slide_in_right' in main_final and 'R.anim.slide_out_left' in main_final,
     "qr reverse navigation": 'R.anim.slide_in_left' in qr_final and 'R.anim.slide_out_right' in qr_final,
 }
-for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
+for name, ok in checks.items():
+    print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
-if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
+if failed:
+    raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
 print("Final gallery/scanner/QR layout audit passed.")
