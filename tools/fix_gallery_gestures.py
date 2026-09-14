@@ -3,8 +3,8 @@ from pathlib import Path
 path = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
 text = path.read_text(encoding="utf-8")
 
-# The previous pointerInput key included mediaZoom. Every zoom update therefore
-# recreated the gesture detector and cancelled the pinch, forcing many tiny pinches.
+# Keep the pointerInput instance alive while mediaZoom changes. Recreating it
+# on every zoom update was cancelling continuous pinches.
 text = text.replace(
     ".pointerInput(uri, currentIndex, isVideo, mediaZoom) {",
     ".pointerInput(uri, currentIndex, isVideo) {",
@@ -88,7 +88,7 @@ if old_gesture not in text:
 text = text.replace(old_gesture, new_gesture, 1)
 
 helper_marker = "@Composable private fun CachedFullImage"
-helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
+helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: suspend (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
     awaitPointerEventScope {
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
@@ -126,12 +126,13 @@ if helper_marker not in text:
 if "private suspend fun PointerInputScope.detectGalleryTransformGestures" not in text:
     text = text.replace(helper_marker, helper + helper_marker, 1)
 
+# Compose 1.7.8 places these gesture-await helpers in foundation.gestures.
 imports = [
     "import androidx.compose.ui.geometry.Offset",
     "import androidx.compose.ui.input.pointer.PointerEventPass",
     "import androidx.compose.ui.input.pointer.PointerInputScope",
-    "import androidx.compose.ui.input.pointer.awaitEachGesture",
-    "import androidx.compose.ui.input.pointer.awaitFirstDown",
+    "import androidx.compose.foundation.gestures.awaitEachGesture",
+    "import androidx.compose.foundation.gestures.awaitFirstDown",
     "import androidx.compose.ui.input.pointer.positionChanged",
 ]
 for line in imports:
@@ -139,4 +140,4 @@ for line in imports:
         text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery gestures fixed: pinch detector is no longer recreated by zoom changes, and the same initial-pass gesture layer handles smooth photo/video swipe without competing child-view gesture consumption.")
+print("Gallery gesture helper fixed for Compose 1.7.8: correct gesture imports and suspend callback, while preserving continuous pinch and initial-pass video/photo swiping.")
