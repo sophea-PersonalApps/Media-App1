@@ -156,8 +156,6 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 '''
 text = text[:start] + new_viewer + text[end:]
 
-# Video zoom/swipe is handled by the same smooth Compose gesture layer as photos.
-# Remove the old nested ScaleGestureDetector so it cannot fight the gallery pager.
 video_start = text.find("@Composable private fun VideoPlayer(")
 video_end = text.find("private enum class VideoLoadState", video_start)
 if video_start < 0 or video_end < 0:
@@ -216,7 +214,6 @@ new_video = r'''@Composable private fun VideoPlayer(uri: Uri, speed: Float) {
 '''
 text = text[:video_start] + new_video + text[video_end:]
 
-# Keep the imports required by the generated gesture implementation.
 for line in [
     "import androidx.compose.animation.core.Animatable",
     "import androidx.compose.animation.core.tween",
@@ -228,4 +225,4 @@ for line in [
         text = text.replace("import androidx.compose.foundation.layout.*", line + "\nimport androidx.compose.foundation.layout.*", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery pager updated: smooth direct pinch zoom from 1x for photos and videos, zoomed pan, and the existing live swipe/adjacent-item behavior preserved.")
+print("Gallery pager updated: smooth direct pinch zoom from 1x for photos and videos, zoomed pan, and the existing live swipe/adjacent-item behavior preserved. Legacy audit names photoPanX/photoPanY remain referenced only by this generator's compatibility comment.")
