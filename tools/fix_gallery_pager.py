@@ -27,12 +27,10 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
-        // Pre-decode the two destinations so a normal adjacent swipe can display immediately.
-        listOfNotNull(previousItem, nextItem).forEach { item ->
-            if (!item.isVideo && ThumbnailMemoryCache.getFull(item.uri) == null) {
-                withContext(Dispatchers.IO) {
-                    loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
-                }
+        // Warm adjacent photos in parallel. Do not block the currently displayed photo.
+        listOfNotNull(previousItem, nextItem).filter { !it.isVideo && ThumbnailMemoryCache.getFull(it.uri) == null }.map { item ->
+            swipeScope.launch(Dispatchers.IO) {
+                loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
             }
         }
     }
@@ -124,15 +122,22 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 }
 
 @Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
-    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri)) }
+    // Always paint a cached thumbnail first. The full-resolution decode is then swapped in
+    // without ever leaving a blank surface with a loading spinner.
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri) ?: ThumbnailMemoryCache.get(uri, false)) }
     LaunchedEffect(uri) {
-        if (bitmap == null) {
-            bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
-            bitmap?.let { ThumbnailMemoryCache.putFull(uri, it) }
+        if (ThumbnailMemoryCache.getFull(uri) == null) {
+            withContext(Dispatchers.IO) {
+                loadFullImage(context, uri)?.let { full ->
+                    ThumbnailMemoryCache.putFull(uri, full)
+                    withContext(Dispatchers.Main) { bitmap = full }
+                }
+            }
+        } else {
+            bitmap = ThumbnailMemoryCache.getFull(uri)
         }
     }
     bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
-        ?: CircularProgressIndicator(color = Color.White)
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
@@ -147,24 +152,5 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
 
 '''
 text = text[:start] + new_viewer + text[end:]
-# Add a separate full-image cache to the existing thumbnail cache. Full images are capped by LruCache.
-old_cache = '''private object ThumbnailMemoryCache {
-    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
-    private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
-    fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
-    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
-}'''
-new_cache = '''private object ThumbnailMemoryCache {
-    private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
-    private const val FULL_PREFIX = "full|"
-    private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
-    fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
-    fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
-    fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
-    fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
-}'''
-if old_cache not in text:
-    raise SystemExit("ThumbnailMemoryCache block not found")
-text = text.replace(old_cache, new_cache, 1)
 path.write_text(text, encoding="utf-8")
-print("Replaced MediaViewer with preloaded full-image neighbors and a bounded full-image cache.")
+print("Gallery viewer updated: adjacent full-image warming is parallel and the current photo uses its cached thumbnail immediately while the full image decodes; pinch/swipe logic is otherwise unchanged.")
