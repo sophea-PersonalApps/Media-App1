@@ -34,6 +34,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import kotlinx.coroutines.launch
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.zIndex
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.animation.core.tween
@@ -269,6 +274,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     var speedMenuOpen by rememberSaveable(uri) { mutableStateOf(false) }
     var viewportWidth by remember(uri) { mutableIntStateOf(0) }
     var viewportHeight by remember(uri) { mutableIntStateOf(0) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
     val swipeOffset = remember { Animatable(0f) }
     val swipeScope = rememberCoroutineScope()
     val previousItem = items.getOrNull(currentIndex - 1)
@@ -276,7 +282,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     val context = LocalContext.current
 
     LaunchedEffect(uri, currentIndex) {
-        swipeOffset.snapTo(0f)
+        dragOffset = 0f
         mediaZoom = 1f
         mediaPanX = 0f
         mediaPanY = 0f
@@ -308,18 +314,18 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                 IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
             Box(Modifier.fillMaxWidth().weight(1f).onSizeChanged { viewportWidth = it.width; viewportHeight = it.height }, contentAlignment = Alignment.Center) {
-                if (previousItem != null) AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() })
+                if (previousItem != null) AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = dragOffset - viewportWidth.toFloat() })
 
                 Box(
                     Modifier.fillMaxSize().graphicsLayer {
-                        translationX = if (mediaZoom <= 1f) swipeOffset.value else mediaPanX
+                        translationX = if (mediaZoom <= 1f) dragOffset else mediaPanX
                         translationY = if (mediaZoom > 1f) mediaPanY else 0f
                         scaleX = mediaZoom
                         scaleY = mediaZoom
-                    }.pointerInput(uri, currentIndex, isVideo, mediaZoom) {
+                    }.pointerInput(uri, currentIndex, isVideo) {
                         var horizontalDrag = 0f
                         var navigationStarted = false
-                        detectTransformGestures(panZoomLock = false) { _, pan, zoom, _ ->
+                        detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
                             val wasZoomed = mediaZoom > 1f
                             val newZoom = (mediaZoom * zoom).coerceIn(1f, 8f)
                             mediaZoom = newZoom
@@ -331,10 +337,10 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                             } else {
                                 mediaPanX = 0f
                                 mediaPanY = 0f
-                                if (zoom < 1f || wasZoomed) horizontalDrag = 0f
-                                if (!navigationStarted && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                if (zoom < 1f || wasZoomed || pointerCount > 1) horizontalDrag = 0f
+                                if (!navigationStarted && pointerCount == 1 && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
                                     horizontalDrag += pan.x
-                                    swipeScope.launch { swipeOffset.snapTo(horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
+                                    dragOffset = horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
                                     val threshold = minOf(140f, viewportWidth * 0.22f)
                                     val target = when {
                                         horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
@@ -344,25 +350,59 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                     if (target >= 0) {
                                         navigationStarted = true
                                         swipeScope.launch {
-                                            swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
+                                            val navigationAnim = Animatable(dragOffset)
+                                            navigationAnim.animateTo(
+                                                if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(),
+                                                tween(180)
+                                            ) { dragOffset = value }
                                             onNavigate(target)
-                                            swipeOffset.snapTo(0f)
+                                            dragOffset = 0f
                                         }
                                     }
                                 }
                             }
                         }
-                        horizontalDrag = 0f
-                        navigationStarted = false
                     }
                 ) {
                     if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context)
                 }
 
-                if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
+                if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = dragOffset + viewportWidth.toFloat() })
             }
         }
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+    }
+}
+
+private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            var previousCentroid = Offset.Zero
+            var previousSpan = 0f
+            var haveCentroid = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.isEmpty()) break
+
+                val centroid = pressed.map { it.position }.reduce { a, b -> a + b } / pressed.size.toFloat()
+                val pan = if (haveCentroid) centroid - previousCentroid else Offset.Zero
+                val span = if (pressed.size > 1) {
+                    pressed.map { (it.position - centroid).getDistance() }.average().toFloat()
+                } else 0f
+                val zoom = if (pressed.size > 1 && previousSpan > 0f) (span / previousSpan).coerceIn(0.85f, 1.15f) else 1f
+
+                onGesture(centroid, pan, zoom, pressed.size)
+                previousCentroid = centroid
+                previousSpan = span
+                haveCentroid = true
+
+                event.changes.forEach { change ->
+                    if (change.positionChanged()) change.consume()
+                }
+            }
+        }
     }
 }
 
