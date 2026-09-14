@@ -47,11 +47,12 @@ internal fun CameraSectionControls(
     onFlip: () -> Unit,
     onMore: () -> Unit,
     primaryEnabled: Boolean = true,
-    isRecording: Boolean = false
+    isRecording: Boolean = false,
+    scannerPageCount: Int = 0
 ) {
     val modes = CameraSectionMode.entries
     val selectedIndex = modes.indexOf(mode)
-    val rightLabel = if (mode == CameraSectionMode.SCAN) "PAGES" else "FLIP"
+    val rightLabel = if (mode == CameraSectionMode.SCAN) "PAGES ($scannerPageCount)" else "FLIP"
     Box(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.82f))) {
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
