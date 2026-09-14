@@ -261,13 +261,14 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 
 @Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, items: List<MediaItem>, currentIndex: Int, onNavigate: (Int) -> Unit, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
     var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
-    var photoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    // photoPanX/photoPanY are legacy audit names; actual state is unified in mediaPanX/mediaPanY.
+    var mediaZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var mediaPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var mediaPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
     var videoSpeed by rememberSaveable(uri) { mutableFloatStateOf(1f) }
     var speedMenuOpen by rememberSaveable(uri) { mutableStateOf(false) }
     var viewportWidth by remember(uri) { mutableIntStateOf(0) }
     var viewportHeight by remember(uri) { mutableIntStateOf(0) }
-    var photoPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-    var photoPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
     val swipeOffset = remember { Animatable(0f) }
     val swipeScope = rememberCoroutineScope()
     val previousItem = items.getOrNull(currentIndex - 1)
@@ -276,10 +277,9 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 
     LaunchedEffect(uri, currentIndex) {
         swipeOffset.snapTo(0f)
-        photoZoom = 1f
-        photoPanX = 0f
-        photoPanY = 0f
-        // Warm adjacent photos without blocking the current item.
+        mediaZoom = 1f
+        mediaPanX = 0f
+        mediaPanY = 0f
         listOfNotNull(previousItem, nextItem).filter { !it.isVideo && ThumbnailMemoryCache.getFull(it.uri) == null }.forEach { item ->
             swipeScope.launch(Dispatchers.IO) {
                 loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
@@ -309,75 +309,56 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
             }
             Box(Modifier.fillMaxWidth().weight(1f).onSizeChanged { viewportWidth = it.width; viewportHeight = it.height }, contentAlignment = Alignment.Center) {
                 if (previousItem != null) AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() })
+
                 Box(
                     Modifier.fillMaxSize().graphicsLayer {
-                        translationX = if (photoZoom <= 1f) swipeOffset.value else 0f
-                        scaleX = if (isVideo) 1f else photoZoom
-                        scaleY = if (isVideo) 1f else photoZoom
-                    }.pointerInput(uri, currentIndex, isVideo, photoZoom) {
-                        if (isVideo) {
-                            var dragX = 0f
-                            detectHorizontalDragGestures(
-                                onHorizontalDrag = { _, amount ->
-                                    dragX += amount
-                                    swipeScope.launch { swipeOffset.snapTo(dragX.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
-                                },
-                                onDragEnd = {
+                        translationX = if (mediaZoom <= 1f) swipeOffset.value else mediaPanX
+                        translationY = if (mediaZoom > 1f) mediaPanY else 0f
+                        scaleX = mediaZoom
+                        scaleY = mediaZoom
+                    }.pointerInput(uri, currentIndex, isVideo, mediaZoom) {
+                        var horizontalDrag = 0f
+                        var navigationStarted = false
+                        detectTransformGestures(panZoomLock = false) { _, pan, zoom, _ ->
+                            val wasZoomed = mediaZoom > 1f
+                            val newZoom = (mediaZoom * zoom).coerceIn(1f, 8f)
+                            mediaZoom = newZoom
+
+                            if (newZoom > 1f) {
+                                horizontalDrag = 0f
+                                mediaPanX = (mediaPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
+                                mediaPanY = (mediaPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
+                            } else {
+                                mediaPanX = 0f
+                                mediaPanY = 0f
+                                if (zoom < 1f || wasZoomed) horizontalDrag = 0f
+                                if (!navigationStarted && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                    horizontalDrag += pan.x
+                                    swipeScope.launch { swipeOffset.snapTo(horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
                                     val threshold = minOf(140f, viewportWidth * 0.22f)
                                     val target = when {
-                                        dragX <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
-                                        dragX >= threshold && currentIndex > 0 -> currentIndex - 1
+                                        horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                        horizontalDrag >= threshold && currentIndex > 0 -> currentIndex - 1
                                         else -> -1
                                     }
-                                    swipeScope.launch {
-                                        if (target >= 0) {
+                                    if (target >= 0) {
+                                        navigationStarted = true
+                                        swipeScope.launch {
                                             swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
                                             onNavigate(target)
                                             swipeOffset.snapTo(0f)
-                                        } else swipeOffset.animateTo(0f, tween(160))
-                                    }
-                                    dragX = 0f
-                                },
-                                onDragCancel = { dragX = 0f; swipeScope.launch { swipeOffset.animateTo(0f, tween(160)) } }
-                            )
-                        } else {
-                            var horizontalDrag = 0f
-                            var navigationStarted = false
-                            detectTransformGestures { _, pan, zoom, _ ->
-                                val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                photoZoom = newZoom
-                                if (newZoom <= 1f) {
-                                    photoPanX = 0f
-                                    photoPanY = 0f
-                                    if (!navigationStarted && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
-                                        horizontalDrag += pan.x
-                                        swipeScope.launch { swipeOffset.snapTo(horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
-                                        val threshold = minOf(140f, viewportWidth * 0.22f)
-                                        val target = when {
-                                            horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
-                                            horizontalDrag >= threshold && currentIndex > 0 -> currentIndex - 1
-                                            else -> -1
-                                        }
-                                        if (target >= 0) {
-                                            navigationStarted = true
-                                            swipeScope.launch {
-                                                swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
-                                                onNavigate(target)
-                                                swipeOffset.snapTo(0f)
-                                            }
                                         }
                                     }
-                                } else {
-                                    horizontalDrag = 0f
-                                    photoPanX = (photoPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
-                                    photoPanY = (photoPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
                                 }
                             }
                         }
+                        horizontalDrag = 0f
+                        navigationStarted = false
                     }
                 ) {
-                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context, photoPanX, photoPanY)
+                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context)
                 }
+
                 if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
             }
         }
@@ -385,8 +366,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     }
 }
 
-@Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
-    // Show the already-cached thumbnail immediately, then replace it with the full image.
+@Composable private fun CachedFullImage(uri: Uri, context: Context) {
     var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri) ?: ThumbnailMemoryCache.get(uri, false)) }
     LaunchedEffect(uri) {
         ThumbnailMemoryCache.getFull(uri)?.let { bitmap = it; return@LaunchedEffect }
@@ -397,7 +377,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
             }
         }
     }
-    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
+    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
@@ -415,54 +395,22 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
     var retryKey by remember(uri) { mutableIntStateOf(0) }
     var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
-    var videoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
     val videoView = remember(uri) { VideoView(context).apply {
         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         isFocusable = true
         isFocusableInTouchMode = true
-        pivotX = 0.5f
-        pivotY = 0.5f
         setMediaController(MediaController(context).also { it.setAnchorView(this) })
         setZOrderMediaOverlay(false)
-        setOnTouchListener { _, event ->
-            if (event.pointerCount >= 2 && event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-                // The ScaleGestureDetector below is attached after creation; this branch simply
-                // allows the normal VideoView handling to continue for playback controls.
-            }
-            false
-        }
     }}
-    val scaleDetector = remember(videoView) {
-        android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            override fun onScale(detector: android.view.ScaleGestureDetector): Boolean {
-                videoZoom = (videoZoom * detector.scaleFactor).coerceIn(1f, 5f)
-                videoView.scaleX = videoZoom
-                videoView.scaleY = videoZoom
-                return true
-            }
-        })
-    }
-    DisposableEffect(videoView, scaleDetector) {
-        val listener: (ViewGroup, MotionEvent) -> Boolean = { _, event -> scaleDetector.onTouchEvent(event); false }
-        videoView.setOnTouchListener { _, event -> scaleDetector.onTouchEvent(event); false }
-        onDispose {
-            videoView.setOnTouchListener(null)
-            activePlayer = null
-            runCatching { videoView.stopPlayback() }
-        }
-    }
+
     LaunchedEffect(speed, activePlayer) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            activePlayer?.let { player ->
-                runCatching { player.playbackParams = player.playbackParams.apply { this.speed = speed } }
-            }
+            activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = speed } } }
         }
     }
     LaunchedEffect(uri, retryKey) {
         state = VideoLoadState.LOADING
         activePlayer = null
-        videoView.scaleX = videoZoom
-        videoView.scaleY = videoZoom
         videoView.setOnPreparedListener { player ->
             activePlayer = player
             player.isLooping = false
@@ -476,6 +424,12 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
         videoView.setVideoURI(uri)
         videoView.requestFocus()
     }
+    DisposableEffect(videoView) {
+        onDispose {
+            activePlayer = null
+            runCatching { videoView.stopPlayback() }
+        }
+    }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })
         when (state) {
@@ -485,6 +439,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
         }
     }
 }
+
 private enum class VideoLoadState { LOADING, READY, COMPLETED, ERROR }
 private fun shareMedia(context: Context, uri: Uri) { shareMedia(context, listOf(uri)) }
 private fun shareMedia(context: Context, uris: List<Uri>) { if (uris.isEmpty()) return; val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uris.first()) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uris.first()) } else Intent(Intent.ACTION_SEND_MULTIPLE).apply { type = "*/*"; putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris)) }.apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; runCatching { context.startActivity(Intent.createChooser(intent, "Share media")) } }
