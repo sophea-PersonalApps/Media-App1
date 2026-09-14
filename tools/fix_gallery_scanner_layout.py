@@ -8,7 +8,7 @@ QR = ROOT / "QrScannerActivity.kt"
 GALLERY = ROOT / "GalleryActivity.kt"
 
 def balanced_block(text, start):
-    op = text.find("{", start)
+    op = text.find("{")
     if op < 0: raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
@@ -25,9 +25,9 @@ if cap_start < 0 or cap_end < 0: raise SystemExit("ScannerCapture function bound
 cap = scanner[cap_start:cap_end]
 page_marker = cap.find('Text("${pages.size} page${if (pages.size == 1) "" else "s"}')
 if page_marker < 0: raise SystemExit("Scanner page-count control not found")
-column_start = cap.rfind("Column(", 0, page_marker)
-if column_start < 0: raise SystemExit("Scanner bottom control Column not found")
-a, e = balanced_block(cap, column_start)
+box_start = cap.find('    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {')
+if box_start < 0: raise SystemExit("ScannerCapture outer Box not found")
+box_a, box_e = balanced_block(cap, box_start)
 replacement = '''Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 AndroidView(
@@ -46,7 +46,8 @@ replacement = '''Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
                 onPrimaryAction = onCapture,
                 onFlip = onFinish,
                 onMore = { },
-                primaryEnabled = true
+                primaryEnabled = true,
+                scannerPageCount = pages.size
             )
             CameraSectionBottomNavigation(
                 cameraSelected = true,
@@ -54,10 +55,6 @@ replacement = '''Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
                 onGallery = onOpenGallery
             )
         }'''
-# Replace the complete old overlay layout, from the outer Box through its closing brace.
-box_start = cap.find('    Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {')
-if box_start < 0: raise SystemExit("ScannerCapture outer Box not found")
-box_a, box_e = balanced_block(cap, box_start)
 cap = cap[:box_a] + replacement + cap[box_e:]
 scanner = scanner[:cap_start] + cap + scanner[cap_end:]
 scanner = scanner.replace(
@@ -108,7 +105,7 @@ checks = {
     "scanner controls below preview": cap.find('CameraSectionControls(') > cap.find('Box(Modifier.fillMaxWidth().weight(1f))'),
     "scanner bottom navigation below controls": cap.find('CameraSectionBottomNavigation(') > cap.find('CameraSectionControls('),
     "scanner shared controls": 'mode = CameraSectionMode.SCAN' in cap and 'onPrimaryAction = onCapture' in cap,
-    "scanner PAGES opens preview": 'onFlip = onFinish' in cap,
+    "scanner PAGES action": 'onFlip = onFinish' in cap and 'scannerPageCount = pages.size' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
     "gallery animation imports": 'import androidx.compose.animation.core.Animatable' in gallery_final and 'import androidx.compose.animation.core.tween' in gallery_final,
