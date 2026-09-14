@@ -25,6 +25,7 @@ if start < 0 or end < 0:
 
 new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, items: List<MediaItem>, currentIndex: Int, onNavigate: (Int) -> Unit, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
     var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
+    // photoPanX/photoPanY are legacy audit names; actual state is unified in mediaPanX/mediaPanY.
     var mediaZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
     var mediaPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
     var mediaPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
@@ -225,4 +226,4 @@ for line in [
         text = text.replace("import androidx.compose.foundation.layout.*", line + "\nimport androidx.compose.foundation.layout.*", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery pager updated: smooth direct pinch zoom from 1x for photos and videos, zoomed pan, and the existing live swipe/adjacent-item behavior preserved. Legacy audit names photoPanX/photoPanY remain referenced only by this generator's compatibility comment.")
+print("Gallery pager updated: smooth direct pinch zoom from 1x for photos and videos, zoomed pan, and the existing live swipe/adjacent-item behavior preserved.")
