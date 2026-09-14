@@ -414,7 +414,8 @@ Column(Modifier.fillMaxSize().background(ComposeColor.Black)) {
                 onPrimaryAction = onCapture,
                 onFlip = onFinish,
                 onMore = { },
-                primaryEnabled = true
+                primaryEnabled = true,
+                scannerPageCount = pages.size
             )
             CameraSectionBottomNavigation(
                 cameraSelected = true,

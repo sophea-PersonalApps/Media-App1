@@ -90,10 +90,10 @@ private data class Album(val id: String, val name: String, val count: Int, val c
 
 private object ThumbnailMemoryCache {
     private const val MAX_CACHE_BYTES = 32 * 1024 * 1024
-    private const val FULL_PREFIX = "full|"
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
     fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
     fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+    private const val FULL_PREFIX = "full|"
     fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
     fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
 }
@@ -279,12 +279,10 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
         photoZoom = 1f
         photoPanX = 0f
         photoPanY = 0f
-        // Pre-decode the two destinations so a normal adjacent swipe can display immediately.
-        listOfNotNull(previousItem, nextItem).forEach { item ->
-            if (!item.isVideo && ThumbnailMemoryCache.getFull(item.uri) == null) {
-                withContext(Dispatchers.IO) {
-                    loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
-                }
+        // Warm adjacent photos without blocking the current item.
+        listOfNotNull(previousItem, nextItem).filter { !it.isVideo && ThumbnailMemoryCache.getFull(it.uri) == null }.forEach { item ->
+            swipeScope.launch(Dispatchers.IO) {
+                loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
             }
         }
     }
@@ -309,20 +307,15 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                 }
                 IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
             }
-            Box(
-                Modifier.fillMaxWidth().weight(1f).onSizeChanged { viewportWidth = it.width; viewportHeight = it.height },
-                contentAlignment = Alignment.Center
-            ) {
-                if (previousItem != null) {
-                    AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() })
-                }
+            Box(Modifier.fillMaxWidth().weight(1f).onSizeChanged { viewportWidth = it.width; viewportHeight = it.height }, contentAlignment = Alignment.Center) {
+                if (previousItem != null) AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value - viewportWidth.toFloat() })
                 Box(
                     Modifier.fillMaxSize().graphicsLayer {
                         translationX = if (photoZoom <= 1f) swipeOffset.value else 0f
                         scaleX = if (isVideo) 1f else photoZoom
                         scaleY = if (isVideo) 1f else photoZoom
                     }.pointerInput(uri, currentIndex, isVideo, photoZoom) {
-                        if (isVideo || photoZoom <= 1f) {
+                        if (isVideo) {
                             var dragX = 0f
                             detectHorizontalDragGestures(
                                 onHorizontalDrag = { _, amount ->
@@ -330,45 +323,62 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                                     swipeScope.launch { swipeOffset.snapTo(dragX.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
                                 },
                                 onDragEnd = {
-                                    if (viewportWidth > 0) {
-                                        val threshold = minOf(140f, viewportWidth * 0.22f)
-                                        val target = when {
-                                            dragX <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
-                                            dragX >= threshold && currentIndex > 0 -> currentIndex - 1
-                                            else -> -1
-                                        }
-                                        swipeScope.launch {
-                                            if (target >= 0) {
-                                                val destination = if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat()
-                                                swipeOffset.animateTo(destination, tween(180))
-                                                onNavigate(target)
-                                                swipeOffset.snapTo(0f)
-                                            } else {
-                                                swipeOffset.animateTo(0f, tween(160))
-                                            }
-                                        }
+                                    val threshold = minOf(140f, viewportWidth * 0.22f)
+                                    val target = when {
+                                        dragX <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                        dragX >= threshold && currentIndex > 0 -> currentIndex - 1
+                                        else -> -1
+                                    }
+                                    swipeScope.launch {
+                                        if (target >= 0) {
+                                            swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
+                                            onNavigate(target)
+                                            swipeOffset.snapTo(0f)
+                                        } else swipeOffset.animateTo(0f, tween(160))
                                     }
                                     dragX = 0f
                                 },
                                 onDragCancel = { dragX = 0f; swipeScope.launch { swipeOffset.animateTo(0f, tween(160)) } }
                             )
                         } else {
+                            var horizontalDrag = 0f
+                            var navigationStarted = false
                             detectTransformGestures { _, pan, zoom, _ ->
-                                photoZoom = (photoZoom * zoom).coerceIn(1f, 8f)
-                                val maxPanX = viewportWidth.toFloat() * (photoZoom - 1f) / 2f
-                                val maxPanY = viewportHeight.toFloat() * (photoZoom - 1f) / 2f
-                                photoPanX = (photoPanX + pan.x).coerceIn(-maxPanX, maxPanX)
-                                photoPanY = (photoPanY + pan.y).coerceIn(-maxPanY, maxPanY)
-                                if (photoZoom <= 1f) { photoPanX = 0f; photoPanY = 0f }
+                                val newZoom = (photoZoom * zoom).coerceIn(1f, 8f)
+                                photoZoom = newZoom
+                                if (newZoom <= 1f) {
+                                    photoPanX = 0f
+                                    photoPanY = 0f
+                                    if (!navigationStarted && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                        horizontalDrag += pan.x
+                                        swipeScope.launch { swipeOffset.snapTo(horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())) }
+                                        val threshold = minOf(140f, viewportWidth * 0.22f)
+                                        val target = when {
+                                            horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                            horizontalDrag >= threshold && currentIndex > 0 -> currentIndex - 1
+                                            else -> -1
+                                        }
+                                        if (target >= 0) {
+                                            navigationStarted = true
+                                            swipeScope.launch {
+                                                swipeOffset.animateTo(if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(), tween(180))
+                                                onNavigate(target)
+                                                swipeOffset.snapTo(0f)
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    horizontalDrag = 0f
+                                    photoPanX = (photoPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
+                                    photoPanY = (photoPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
+                                }
                             }
                         }
                     }
                 ) {
                     if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context, photoPanX, photoPanY)
                 }
-                if (nextItem != null) {
-                    AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
-                }
+                if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = swipeOffset.value + viewportWidth.toFloat() })
             }
         }
         if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
@@ -376,15 +386,18 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 }
 
 @Composable private fun CachedFullImage(uri: Uri, context: Context, panX: Float, panY: Float) {
-    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri)) }
+    // Show the already-cached thumbnail immediately, then replace it with the full image.
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri) ?: ThumbnailMemoryCache.get(uri, false)) }
     LaunchedEffect(uri) {
-        if (bitmap == null) {
-            bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) }
-            bitmap?.let { ThumbnailMemoryCache.putFull(uri, it) }
+        ThumbnailMemoryCache.getFull(uri)?.let { bitmap = it; return@LaunchedEffect }
+        withContext(Dispatchers.IO) {
+            loadFullImage(context, uri)?.let { full ->
+                ThumbnailMemoryCache.putFull(uri, full)
+                withContext(Dispatchers.Main) { bitmap = full }
+            }
         }
     }
     bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer { translationX = panX; translationY = panY }, contentScale = ContentScale.Fit) }
-        ?: CircularProgressIndicator(color = Color.White)
 }
 
 @Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
