@@ -42,6 +42,11 @@ jobs:
           set -euo pipefail
           python3 tools/fix_gallery_scanner_layout.py
 
+      - name: Apply final gallery gesture fix
+        run: |
+          set -euo pipefail
+          python3 tools/fix_gallery_gestures.py
+
       - name: Set up JDK 17
         uses: actions/setup-java@v5
         with:
@@ -82,7 +87,8 @@ jobs:
               "gallery pager": "val swipeOffset = remember { Animatable(0f) }" in gallery and "AdjacentMedia(" in gallery,
               "gallery adjacent items": "previousItem" in gallery and "nextItem" in gallery,
               "gallery drag animation": "swipeOffset.animateTo(" in gallery and "tween(180)" in gallery,
-              "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectTransformGestures" in gallery,
+              "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectGalleryTransformGestures" in gallery,
+              "gallery gesture continuity": ".pointerInput(uri, currentIndex, isVideo)" in gallery and "pointerCount == 1" in gallery and "swipeOffset.snapTo(horizontalDrag" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
               "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
               "gallery full-image cache": "fun getFull(uri: Uri)" in gallery and "fun putFull(uri: Uri, bitmap: Bitmap)" in gallery and "ThumbnailMemoryCache.get(uri, false)" in gallery,
@@ -132,6 +138,6 @@ jobs:
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Persist final gallery pager and scanner layout [skip ci]'
+            git commit -m 'Persist final gallery gesture fix [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
