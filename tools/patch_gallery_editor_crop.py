@@ -23,37 +23,70 @@ if 'Text(if (cropMode) "Done Crop" else "Crop")' not in text:
 
 if "CropOverlay(" not in text:
     old_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
-    new_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> {\n                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {\n                            Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                            if (cropMode) {\n                                CropOverlay(cropLeft, cropTop, cropRight, cropBottom) { left, top, right, bottom ->\n                                    cropLeft = left\n                                    cropTop = top\n                                    cropRight = right\n                                    cropBottom = bottom\n                                }\n                            }\n                        }\n                    }\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
+    new_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> {\n                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {\n                            Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                            if (cropMode) {\n                                CropOverlay(\n                                    cropLeft = cropLeft,\n                                    cropTop = cropTop,\n                                    cropRight = cropRight,\n                                    cropBottom = cropBottom,\n                                    imageWidth = preview!!.width,\n                                    imageHeight = preview!!.height,\n                                    onChange = { left, top, right, bottom ->\n                                        cropLeft = left\n                                        cropTop = top\n                                        cropRight = right\n                                        cropBottom = bottom\n                                    }\n                                )\n                            }\n                        }\n                    }\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
     replace_once(old_preview, new_preview, "crop preview")
 
-    marker = '''private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri, maxSide: Int): Bitmap? {'''
-    crop_overlay = r'''
+# Keep the actual photo fixed while the crop rectangle is being adjusted. The crop is only
+# applied to the preview after the user taps Done Crop.
+old_effect = '''    LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) {\n        val source = originalPreview ?: return@LaunchedEffect\n        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) }.getOrNull() }\n        preview?.let { old -> if (!old.isRecycled && old !== generated) old.recycle() }\n        preview = generated\n    }'''
+new_effect = '''    LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropMode, cropLeft, cropTop, cropRight, cropBottom) {\n        val source = originalPreview ?: return@LaunchedEffect\n        val displayLeft = if (cropMode) 0f else cropLeft\n        val displayTop = if (cropMode) 0f else cropTop\n        val displayRight = if (cropMode) 1f else cropRight\n        val displayBottom = if (cropMode) 1f else cropBottom\n        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, displayLeft, displayTop, displayRight, displayBottom) }.getOrNull() }\n        preview?.let { old -> if (!old.isRecycled && old !== generated) old.recycle() }\n        preview = generated\n    }'''
+replace_once(old_effect, new_effect, "crop preview effect")
+
+marker = '''private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri, maxSide: Int): Bitmap? {'''
+crop_overlay = r'''
 @Composable
 private fun CropOverlay(
     cropLeft: Float,
     cropTop: Float,
     cropRight: Float,
     cropBottom: Float,
+    imageWidth: Int,
+    imageHeight: Int,
     onChange: (Float, Float, Float, Float) -> Unit
 ) {
+    var activeHandle = 0
     var dragLeft = cropLeft
     var dragTop = cropTop
     var dragRight = cropRight
     var dragBottom = cropBottom
 
     androidx.compose.foundation.Canvas(
-        Modifier.fillMaxSize().pointerInput(cropLeft, cropTop, cropRight, cropBottom) {
-            var activeHandle = 0
+        Modifier.fillMaxSize().pointerInput(cropLeft, cropTop, cropRight, cropBottom, imageWidth, imageHeight) {
+            activeHandle = 0
             androidx.compose.foundation.gestures.detectTransformGestures { centroid, pan, _, _ ->
+                val imageAspect = imageWidth.toFloat() / imageHeight.toFloat().coerceAtLeast(1f)
+                val viewportAspect = size.width.toFloat() / size.height.toFloat().coerceAtLeast(1f)
+                val imageLeft: Float
+                val imageTop: Float
+                val imageRight: Float
+                val imageBottom: Float
+                if (imageAspect > viewportAspect) {
+                    val displayedHeight = size.width / imageAspect
+                    imageLeft = 0f
+                    imageTop = (size.height - displayedHeight) / 2f
+                    imageRight = size.width
+                    imageBottom = imageTop + displayedHeight
+                } else {
+                    val displayedWidth = size.height * imageAspect
+                    imageLeft = (size.width - displayedWidth) / 2f
+                    imageTop = 0f
+                    imageRight = imageLeft + displayedWidth
+                    imageBottom = size.height
+                }
+
                 if (activeHandle == 0) {
-                    val x = centroid.x / size.width
-                    val y = centroid.y / size.height
-                    val edge = 0.07f
+                    val x = ((centroid.x - imageLeft) / (imageRight - imageLeft)).coerceIn(0f, 1f)
+                    val y = ((centroid.y - imageTop) / (imageBottom - imageTop)).coerceIn(0f, 1f)
+                    val edge = 0.08f
                     val nearLeft = kotlin.math.abs(x - cropLeft) < edge
                     val nearRight = kotlin.math.abs(x - cropRight) < edge
                     val nearTop = kotlin.math.abs(y - cropTop) < edge
                     val nearBottom = kotlin.math.abs(y - cropBottom) < edge
                     activeHandle = when {
+                        nearLeft && nearTop -> 5
+                        nearRight && nearTop -> 6
+                        nearLeft && nearBottom -> 7
+                        nearRight && nearBottom -> 8
                         nearLeft -> 1
                         nearRight -> 2
                         nearTop -> 3
@@ -67,13 +100,13 @@ private fun CropOverlay(
                 }
 
                 if (activeHandle != 0) {
-                    val dx = pan.x / size.width
-                    val dy = pan.y / size.height
+                    val dx = pan.x / (imageRight - imageLeft)
+                    val dy = pan.y / (imageBottom - imageTop)
                     when (activeHandle) {
-                        1 -> dragLeft = (dragLeft + dx).coerceIn(0f, dragRight - 0.05f)
-                        2 -> dragRight = (dragRight + dx).coerceIn(dragLeft + 0.05f, 1f)
-                        3 -> dragTop = (dragTop + dy).coerceIn(0f, dragBottom - 0.05f)
-                        4 -> dragBottom = (dragBottom + dy).coerceIn(dragTop + 0.05f, 1f)
+                        1, 5, 7 -> dragLeft = (dragLeft + dx).coerceIn(0f, dragRight - 0.05f)
+                        2, 6, 8 -> dragRight = (dragRight + dx).coerceIn(dragLeft + 0.05f, 1f)
+                        3, 5, 6 -> dragTop = (dragTop + dy).coerceIn(0f, dragBottom - 0.05f)
+                        4, 7, 8 -> dragBottom = (dragBottom + dy).coerceIn(dragTop + 0.05f, 1f)
                     }
                     onChange(dragLeft, dragTop, dragRight, dragBottom)
                 }
@@ -81,13 +114,32 @@ private fun CropOverlay(
             activeHandle = 0
         }
     ) {
-        val left = size.width * cropLeft
-        val top = size.height * cropTop
-        val right = size.width * cropRight
-        val bottom = size.height * cropBottom
+        val imageAspect = imageWidth.toFloat() / imageHeight.toFloat().coerceAtLeast(1f)
+        val viewportAspect = size.width / size.height.coerceAtLeast(1f)
+        val imageLeft: Float
+        val imageTop: Float
+        val imageRight: Float
+        val imageBottom: Float
+        if (imageAspect > viewportAspect) {
+            val displayedHeight = size.width / imageAspect
+            imageLeft = 0f
+            imageTop = (size.height - displayedHeight) / 2f
+            imageRight = size.width
+            imageBottom = imageTop + displayedHeight
+        } else {
+            val displayedWidth = size.height * imageAspect
+            imageLeft = (size.width - displayedWidth) / 2f
+            imageTop = 0f
+            imageRight = imageLeft + displayedWidth
+            imageBottom = size.height
+        }
+        val left = imageLeft + (imageRight - imageLeft) * cropLeft
+        val top = imageTop + (imageBottom - imageTop) * cropTop
+        val right = imageLeft + (imageRight - imageLeft) * cropRight
+        val bottom = imageTop + (imageBottom - imageTop) * cropBottom
         val stroke = 2.dp.toPx()
         drawRect(Color.White, androidx.compose.ui.geometry.Offset(left, top), androidx.compose.ui.geometry.Size(right - left, bottom - top), style = androidx.compose.ui.graphics.drawscope.Stroke(width = stroke))
-        val handle = 18.dp.toPx()
+        val handle = 20.dp.toPx()
         val handleStroke = 4.dp.toPx()
         val corners = listOf(
             androidx.compose.ui.geometry.Offset(left, top),
@@ -103,7 +155,7 @@ private fun CropOverlay(
 }
 
 '''
-    replace_once(marker, crop_overlay + marker, "crop overlay insertion")
+replace_once(marker, crop_overlay + marker, "crop overlay insertion")
 
 for imp in [
     "import androidx.compose.foundation.gestures.detectTransformGestures",
@@ -118,10 +170,12 @@ checks = {
     "visible photo": 'Image(preview!!.asImageBitmap()' in text and 'if (cropMode)' in text,
     "crop rectangle": "CropOverlay(" in text and "drawRect(Color.White" in text,
     "drag crop edges": "activeHandle" in text and "nearLeft" in text and "nearRight" in text and "nearTop" in text and "nearBottom" in text,
+    "crop corners": "nearLeft && nearTop" in text and "nearRight && nearBottom" in text,
     "crop processing": "Bitmap.createBitmap(output, left, top" in text,
+    "crop preview stays fixed": "val displayLeft = if (cropMode) 0f else cropLeft" in text,
 }
 failed = [k for k,v in checks.items() if not v]
 for k,v in checks.items(): print(("PASS " if v else "FAIL ") + k)
 if failed: raise SystemExit("CROP AUDIT FAILED: " + "; ".join(failed))
 path.write_text(text, encoding="utf-8")
-print("Gallery editor crop now uses a Compose-supported transform detector for edge dragging and is safe to rerun on the generated editor source.")
+print("Gallery editor crop now uses an image-aligned crop frame with draggable edges/corners; the photo stays fixed until Done Crop applies the crop.")
