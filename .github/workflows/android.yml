@@ -90,7 +90,7 @@ jobs:
           cap = scanner[cap_start:cap_end]
           checks = {
               "camera pinch": "detectTransformGestures(panZoomLock = true)" in main and "var gestureZoom = cameraZoom" in main,
-              "gallery stable viewer": ".pointerInput(uri, currentIndex)" in gallery and "detectGalleryTransformGestures" in gallery and "val focalX = centroid.x - viewportWidth / 2f" in gallery,
+              "gallery stable viewer": ".pointerInput(uri, currentIndex)" in gallery and "detectTransformGestures" in gallery and "val focalX = centroid.x - viewportWidth / 2f" in gallery,
               "gallery no swipe pager": "AdjacentMedia(" not in gallery and "swipeOffset" not in gallery and "videoNavigationStarted" not in gallery,
               "gallery zoom pan": "mediaPanX" in gallery and "mediaPanY" in gallery and "mediaZoom" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery,
@@ -98,7 +98,7 @@ jobs:
               "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
               "gallery full-image cache": "fun getFull(uri: Uri)" in gallery and "fun putFull(uri: Uri, bitmap: Bitmap)" in gallery and "ThumbnailMemoryCache.get(uri, false)" in gallery,
               "gallery editor crop mode": "var cropMode by remember" in editor and 'Text(if (cropMode) "Done Crop" else "Crop")' in editor,
-              "gallery editor visible crop": "CropOverlay(" in editor and "drawRect(Color.White" in editor and "nearLeft" in editor and "nearRight" in editor and "nearTop" in editor and "nearBottom" in editor,
+              "gallery editor visible crop": "CropOverlay(" in editor and "drawRect(Color.White" in editor and "handleLeft" in editor and "handleRight" in editor and "handleTop" in editor and "handleBottom" in editor,
               "gallery editor crop processing": "Bitmap.createBitmap(output, left, top" in editor,
               "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap,
               "scanner PAGES action": "onFlip = onFinish" in cap and "scannerPageCount = pages.size" in cap,
