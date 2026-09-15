@@ -70,24 +70,22 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                         scaleX = mediaZoom
                         scaleY = mediaZoom
                     }.pointerInput(uri, currentIndex) {
-                        detectGalleryTransformGestures { centroid, pan, zoom, pointerCount ->
+                        detectTransformGestures { centroid, pan, zoom, _ ->
                             val oldZoom = mediaZoom
                             val zoomRatio = zoom.coerceIn(0.5f, 2f)
                             val newZoom = (oldZoom * zoomRatio).coerceIn(1f, 8f)
-                            if (pointerCount > 1) {
-                                val focalX = centroid.x - viewportWidth / 2f
-                                val focalY = centroid.y - viewportHeight / 2f
-                                val scaleRatio = if (oldZoom > 0f) newZoom / oldZoom else 1f
+                            val focalX = centroid.x - viewportWidth / 2f
+                            val focalY = centroid.y - viewportHeight / 2f
+                            val scaleRatio = if (oldZoom > 0f) newZoom / oldZoom else 1f
+                            val hasPinch = zoomRatio != 1f
+                            if (hasPinch) {
                                 mediaPanX = ((mediaPanX + focalX) * scaleRatio - focalX + pan.x)
                                     .coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
                                 mediaPanY = ((mediaPanY + focalY) * scaleRatio - focalY + pan.y)
                                     .coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
-                            } else if (newZoom > 1f) {
-                                mediaPanX = (mediaPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
-                                mediaPanY = (mediaPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
-                            } else {
-                                mediaPanX = 0f
-                                mediaPanY = 0f
+                            } else if (oldZoom > 1f) {
+                                mediaPanX = (mediaPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (oldZoom - 1f) / 2f, viewportWidth.toFloat() * (oldZoom - 1f) / 2f)
+                                mediaPanY = (mediaPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (oldZoom - 1f) / 2f, viewportHeight.toFloat() * (oldZoom - 1f) / 2f)
                             }
                             mediaZoom = newZoom
                         }
@@ -129,4 +127,4 @@ for line in [
         text = text.replace("import androidx.compose.foundation.layout.*", line + "\nimport androidx.compose.foundation.layout.*", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery viewer now uses stable focal-point pinch/pan without swipe-between-items or adjacent-item transitions.")
+print("Gallery viewer now uses Compose's supported transform detector for stable focal-point pinch/pan without swipe-between-items or adjacent-item transitions.")
