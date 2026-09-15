@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 ROOT = Path("app/src/main/java/com/devlinguistpro/mediatoolbox")
 SCANNER = ROOT / "ScannerActivity.kt"
@@ -9,8 +8,7 @@ GALLERY = ROOT / "GalleryActivity.kt"
 
 def balanced_block(text, start):
     op = text.find("{", start)
-    if op < 0:
-        raise SystemExit("Could not find opening brace")
+    if op < 0: raise SystemExit("Could not find opening brace")
     depth = 0
     for i in range(op, len(text)):
         if text[i] == "{": depth += 1
@@ -79,12 +77,12 @@ imports = [
 ]
 anchor = 'import androidx.compose.foundation.combinedClickable\n'
 for imp in imports:
-    if imp not in gallery: gallery = gallery.replace(anchor, anchor + imp + '\n', 1) if anchor in gallery else gallery
+    if imp not in gallery and anchor in gallery: gallery = gallery.replace(anchor, anchor + imp + '\n', 1)
 GALLERY.write_text(gallery, encoding="utf-8")
 exec(Path("tools/fix_gallery_pager.py").read_text(encoding="utf-8"), globals())
 gallery = GALLERY.read_text(encoding="utf-8")
 for imp in imports:
-    if imp not in gallery: gallery = gallery.replace(anchor, anchor + imp + '\n', 1) if anchor in gallery else gallery
+    if imp not in gallery and anchor in gallery: gallery = gallery.replace(anchor, anchor + imp + '\n', 1)
 GALLERY.write_text(gallery, encoding="utf-8")
 
 scanner_final = SCANNER.read_text(encoding="utf-8")
@@ -103,13 +101,14 @@ checks = {
     "scanner PAGES action": 'onFlip = onFinish' in cap and 'scannerPageCount = pages.size' in cap,
     "scanner old controls removed": 'Text("Finish")' not in cap and 'LazyRow(' not in cap and 'Text("MORE"' not in cap,
     "scanner capture header removed": 'Text("Scanner", color = ComposeColor.White' not in cap and 'IconButton(onClick = onBack)' not in cap,
-    "gallery animation imports": 'import androidx.compose.animation.core.Animatable' in gallery_final and 'import androidx.compose.animation.core.tween' in gallery_final,
-    "gallery gesture imports": 'import androidx.compose.foundation.gestures.detectHorizontalDragGestures' in gallery_final and 'import androidx.compose.foundation.gestures.detectTransformGestures' in gallery_final,
-    "gallery zIndex import": 'import androidx.compose.ui.zIndex' in gallery_final,
-    "gallery coroutine import": 'import kotlinx.coroutines.launch' in gallery_final,
-    "gallery interactive pager": 'Animatable' in gallery_final and 'swipeOffset' in gallery_final and 'animateTo' in gallery_final,
-    "gallery adjacent media": 'AdjacentMedia(' in gallery_final and 'previousItem' in gallery_final and 'nextItem' in gallery_final,
-    "gallery zoom pan": 'detectTransformGestures' in gallery_final and 'mediaPanX' in gallery_final and 'mediaPanY' in gallery_final and 'mediaZoom' in gallery_final,
+    "gallery stable viewer": '.pointerInput(uri, currentIndex)' in gallery_final and 'detectGalleryTransformGestures' in gallery_final,
+    "gallery no adjacent media": 'AdjacentMedia(' not in gallery_final and 'previousItem' not in gallery_final and 'nextItem' not in gallery_final,
+    "gallery no swipe state": 'swipeOffset' not in gallery_final and 'videoNavigationStarted' not in gallery_final,
+    "gallery zoom pan": 'detectGalleryTransformGestures' in gallery_final and 'mediaPanX' in gallery_final and 'mediaPanY' in gallery_final and 'mediaZoom' in gallery_final,
+    "gallery focal point": 'val focalX = centroid.x - viewportWidth / 2f' in gallery_final and 'val focalY = centroid.y - viewportHeight / 2f' in gallery_final,
+    "gallery smooth pinch": 'coerceIn(0.5f, 2f)' in gallery_final,
+    "gallery video speed": 'VideoPlayer(uri, videoSpeed)' in gallery_final,
+    "gallery full-image cache": 'fun getFull(uri: Uri)' in gallery_final and 'fun putFull(uri: Uri, bitmap: Bitmap)' in gallery_final and 'ThumbnailMemoryCache.get(uri, false)' in gallery_final,
     "gallery action row above media": '.zIndex(10f)' in gallery_final,
     "main forward slide": 'R.anim.slide_in_right' in main_final and 'R.anim.slide_out_left' in main_final,
     "qr reverse navigation": 'R.anim.slide_in_left' in qr_final and 'R.anim.slide_out_right' in qr_final,
@@ -117,4 +116,4 @@ checks = {
 for name, ok in checks.items(): print(("PASS " if ok else "FAIL ") + name)
 failed = [name for name, ok in checks.items() if not ok]
 if failed: raise SystemExit("FINAL UI AUDIT FAILED: " + "; ".join(failed))
-print("Final gallery/scanner/QR layout audit passed.")
+print("Final gallery/scanner/QR layout audit passed: stable no-swipe gallery viewer and shared scanner chrome.")
