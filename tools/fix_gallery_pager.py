@@ -72,7 +72,8 @@ new_viewer = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean,
                     }.pointerInput(uri, currentIndex) {
                         detectGalleryTransformGestures { centroid, pan, zoom, pointerCount ->
                             val oldZoom = mediaZoom
-                            val newZoom = (oldZoom * zoom).coerceIn(1f, 8f)
+                            val zoomRatio = zoom.coerceIn(0.5f, 2f)
+                            val newZoom = (oldZoom * zoomRatio).coerceIn(1f, 8f)
                             if (pointerCount > 1) {
                                 val focalX = centroid.x - viewportWidth / 2f
                                 val focalY = centroid.y - viewportHeight / 2f
