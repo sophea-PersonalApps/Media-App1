@@ -8,7 +8,6 @@ text = text.replace(
     ".pointerInput(uri, currentIndex, isVideo) {",
     1,
 )
-
 text = text.replace(
     "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    val swipeOffset = remember { Animatable(0f) }",
     "    var viewportHeight by remember(uri) { mutableIntStateOf(0) }\n    var dragOffset by remember { mutableFloatStateOf(0f) }\n    var videoNavigationStarted by remember(uri) { mutableStateOf(false) }\n    val swipeOffset = remember { Animatable(0f) }",
@@ -56,7 +55,7 @@ old_gesture = '''                        var horizontalDrag = 0f
 '''
 new_gesture = '''                        var horizontalDrag = 0f
                         var navigationStarted = false
-                        detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
+                        if (!isVideo) detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
                             val wasZoomed = mediaZoom > 1f
                             val newZoom = (mediaZoom * zoom).coerceIn(1f, 8f)
                             mediaZoom = newZoom
@@ -94,10 +93,8 @@ new_gesture = '''                        var horizontalDrag = 0f
                             }
                         }
 '''
-if old_gesture not in text:
-    raise SystemExit("Gallery gesture block not found")
+if old_gesture not in text: raise SystemExit("Gallery gesture block not found")
 text = text.replace(old_gesture, new_gesture, 1)
-
 text = text.replace("translationX = swipeOffset.value - viewportWidth.toFloat()", "translationX = dragOffset - viewportWidth.toFloat()")
 text = text.replace("translationX = if (mediaZoom <= 1f) swipeOffset.value else mediaPanX", "translationX = if (mediaZoom <= 1f) dragOffset else mediaPanX")
 text = text.replace("translationX = swipeOffset.value + viewportWidth.toFloat()", "translationX = dragOffset + viewportWidth.toFloat()")
@@ -153,14 +150,12 @@ new_video_call = '''                    if (isVideo) {
                             }
                         )
                     } else CachedFullImage(uri, context)'''
-if old_video_call not in text:
-    raise SystemExit("VideoPlayer call not found")
+if old_video_call not in text: raise SystemExit("VideoPlayer call not found")
 text = text.replace(old_video_call, new_video_call, 1)
 
 old_video_sig = "@Composable private fun VideoPlayer(uri: Uri, speed: Float) {"
 new_video_sig = "@Composable private fun VideoPlayer(uri: Uri, speed: Float, onGesture: (panX: Float, panY: Float, zoom: Float, pointerCount: Int) -> Unit = { _, _, _, _ -> }, onGestureEnd: () -> Unit = {}) {"
-if old_video_sig not in text:
-    raise SystemExit("VideoPlayer signature not found")
+if old_video_sig not in text: raise SystemExit("VideoPlayer signature not found")
 text = text.replace(old_video_sig, new_video_sig, 1)
 
 old_video_box = '''    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -220,11 +215,9 @@ new_video_box = '''    DisposableEffect(videoView, onGesture, onGestureEnd) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })
         when (state) {'''
-if old_video_box not in text:
-    raise SystemExit("VideoPlayer AndroidView block not found")
+if old_video_box not in text: raise SystemExit("VideoPlayer AndroidView block not found")
 text = text.replace(old_video_box, new_video_box, 1)
 
-# Keep the audit marker but make pinch response substantially less quantized than the previous 15% cap.
 text = text.replace("(span / previousSpan).coerceIn(0.85f, 1.15f)", "(span / previousSpan).coerceIn(0.5f, 2f)")
 
 helper_marker = "@Composable private fun CachedFullImage"
@@ -239,22 +232,15 @@ helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val pressed = event.changes.filter { it.pressed }
                 if (pressed.isEmpty()) break
-
                 val centroid = pressed.map { it.position }.reduce { a, b -> a + b } / pressed.size.toFloat()
                 val pan = if (haveCentroid) centroid - previousCentroid else Offset.Zero
-                val span = if (pressed.size > 1) {
-                    pressed.map { (it.position - centroid).getDistance() }.average().toFloat()
-                } else 0f
+                val span = if (pressed.size > 1) pressed.map { (it.position - centroid).getDistance() }.average().toFloat() else 0f
                 val zoom = if (pressed.size > 1 && previousSpan > 0f) (span / previousSpan).coerceIn(0.5f, 2f) else 1f
-
                 onGesture(centroid, pan, zoom, pressed.size)
                 previousCentroid = centroid
                 previousSpan = span
                 haveCentroid = true
-
-                event.changes.forEach { change ->
-                    if (change.positionChanged()) change.consume()
-                }
+                event.changes.forEach { change -> if (change.positionChanged()) change.consume() }
             }
         }
     }
@@ -264,8 +250,7 @@ helper = '''private suspend fun PointerInputScope.detectGalleryTransformGestures
 helper_start = text.find("private suspend fun PointerInputScope.detectGalleryTransformGestures")
 if helper_start >= 0:
     helper_end = text.find(helper_marker, helper_start)
-    if helper_end < 0:
-        raise SystemExit("Existing gallery gesture helper boundary not found")
+    if helper_end < 0: raise SystemExit("Existing gallery gesture helper boundary not found")
     text = text[:helper_start] + helper + text[helper_end:]
 else:
     text = text.replace(helper_marker, helper + helper_marker, 1)
@@ -278,8 +263,7 @@ imports = [
     "import androidx.compose.ui.input.pointer.positionChanged",
 ]
 for line in imports:
-    if line not in text:
-        text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
+    if line not in text: text = text.replace("import androidx.compose.ui.zIndex", line + "\nimport androidx.compose.ui.zIndex", 1)
 
 path.write_text(text, encoding="utf-8")
-print("Gallery gestures updated: direct smoother pinch scaling, video touch forwarding for pinch/swipe, and the existing adjacent-item pager animation is preserved.")
+print("Gallery gesture fix: photo gestures stay on the Compose surface; video gestures are forwarded from VideoView so horizontal video swipes and pinch zoom are not blocked by the player. Pinch scaling is no longer artificially capped to tiny increments.")
