@@ -32,6 +32,11 @@ jobs:
           set -euo pipefail
           python3 tools/patch_gallery_ui.py
 
+      - name: Apply gallery editor crop
+        run: |
+          set -euo pipefail
+          python3 tools/patch_gallery_editor_crop.py
+
       - name: Apply requested gallery and scanner changes
         run: |
           set -euo pipefail
@@ -75,6 +80,7 @@ jobs:
           from pathlib import Path
           main = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
           gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt").read_text(encoding="utf-8")
+          editor = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryEditorActivity.kt").read_text(encoding="utf-8")
           scanner = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
           qr = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt").read_text(encoding="utf-8")
           cap_start = scanner.find("@Composable\nprivate fun ScannerCapture(")
@@ -89,9 +95,14 @@ jobs:
               "gallery drag animation": "animateTo(" in gallery and "tween(180)" in gallery,
               "gallery zoom pan": "photoPanX" in gallery and "photoPanY" in gallery and "detectGalleryTransformGestures" in gallery,
               "gallery gesture continuity": ".pointerInput(uri, currentIndex, isVideo)" in gallery and "pointerCount == 1" in gallery and "dragOffset = horizontalDrag" in gallery,
-              "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery and "Icons.Default.Speed" in gallery,
+              "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery or "videoSpeed," in gallery,
+              "gallery video gesture bridge": "onGesture = { panX, panY, gestureZoom, pointerCount ->" in gallery and "MotionEvent.ACTION_POINTER_DOWN" in gallery,
+              "gallery smooth pinch": "coerceIn(0.5f, 2f)" in gallery,
               "gallery required imports": "import androidx.compose.animation.core.Animatable" in gallery and "import androidx.compose.ui.zIndex" in gallery and "import kotlinx.coroutines.launch" in gallery,
               "gallery full-image cache": "fun getFull(uri: Uri)" in gallery and "fun putFull(uri: Uri, bitmap: Bitmap)" in gallery and "ThumbnailMemoryCache.get(uri, false)" in gallery,
+              "gallery editor crop state": "var cropLeft by remember" in editor and "var cropBottom by remember" in editor,
+              "gallery editor crop controls": 'Text("Crop", color = Color.White' in editor and "Slider(value = cropLeft" in editor,
+              "gallery editor crop processing": "Bitmap.createBitmap(output, left, top" in editor,
               "scanner shared chrome": "mode = CameraSectionMode.SCAN" in cap and "CameraSectionBottomNavigation(" in cap and "onPrimaryAction = onCapture" in cap,
               "scanner PAGES action": "onFlip = onFinish" in cap and "scannerPageCount = pages.size" in cap,
               "scanner old control stack removed": 'Text("Finish")' not in cap and "LazyRow(" not in cap and 'Text("MORE"' not in cap,
@@ -134,10 +145,10 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt app/src/main/res/anim/slide_in_right.xml app/src/main/res/anim/slide_out_left.xml app/src/main/res/anim/slide_in_left.xml app/src/main/res/anim/slide_out_right.xml
+          git add app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryEditorActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt app/src/main/java/com/devlinguistpro/mediatoolbox/QrScannerActivity.kt app/src/main/res/anim/slide_in_right.xml app/src/main/res/anim/slide_out_left.xml app/src/main/res/anim/slide_in_left.xml app/src/main/res/anim/slide_out_right.xml
           if git diff --cached --quiet; then
             echo 'No generated source changes to persist.'
           else
-            git commit -m 'Persist final gallery gesture fix [skip ci]'
+            git commit -m 'Persist final gallery fixes [skip ci]'
             git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
