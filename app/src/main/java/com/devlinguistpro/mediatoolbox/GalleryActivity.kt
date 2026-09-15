@@ -275,6 +275,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
     var viewportWidth by remember(uri) { mutableIntStateOf(0) }
     var viewportHeight by remember(uri) { mutableIntStateOf(0) }
     var dragOffset by remember { mutableFloatStateOf(0f) }
+    var videoNavigationStarted by remember(uri) { mutableStateOf(false) }
     val swipeOffset = remember { Animatable(0f) }
     val swipeScope = rememberCoroutineScope()
     val previousItem = items.getOrNull(currentIndex - 1)
@@ -283,6 +284,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 
     LaunchedEffect(uri, currentIndex) {
         dragOffset = 0f
+        videoNavigationStarted = false
         mediaZoom = 1f
         mediaPanX = 0f
         mediaPanY = 0f
@@ -325,7 +327,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                     }.pointerInput(uri, currentIndex, isVideo) {
                         var horizontalDrag = 0f
                         var navigationStarted = false
-                        detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
+                        if (!isVideo) detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
                             val wasZoomed = mediaZoom > 1f
                             val newZoom = (mediaZoom * zoom).coerceIn(1f, 8f)
                             mediaZoom = newZoom
@@ -364,7 +366,56 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
                         }
                     }
                 ) {
-                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context)
+                    if (isVideo) {
+                        VideoPlayer(
+                            uri,
+                            videoSpeed,
+                            onGesture = { panX, panY, gestureZoom, pointerCount ->
+                                val wasZoomed = mediaZoom > 1f
+                                val newZoom = (mediaZoom * gestureZoom).coerceIn(1f, 8f)
+                                mediaZoom = newZoom
+                                if (newZoom > 1f) {
+                                    mediaPanX = (mediaPanX + panX).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
+                                    mediaPanY = (mediaPanY + panY).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
+                                    dragOffset = 0f
+                                } else {
+                                    mediaPanX = 0f
+                                    mediaPanY = 0f
+                                    if (!videoNavigationStarted && pointerCount == 1 && kotlin.math.abs(panX) > kotlin.math.abs(panY)) {
+                                        dragOffset = (dragOffset + panX).coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
+                                        val threshold = minOf(140f, viewportWidth * 0.22f)
+                                        val target = when {
+                                            dragOffset <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                            dragOffset >= threshold && currentIndex > 0 -> currentIndex - 1
+                                            else -> -1
+                                        }
+                                        if (target >= 0) {
+                                            videoNavigationStarted = true
+                                            swipeScope.launch {
+                                                val navigationAnim = Animatable(dragOffset)
+                                                navigationAnim.animateTo(
+                                                    if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(),
+                                                    tween(180)
+                                                ) { dragOffset = value }
+                                                onNavigate(target)
+                                                dragOffset = 0f
+                                                videoNavigationStarted = false
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onGestureEnd = {
+                                if (!videoNavigationStarted && dragOffset != 0f) {
+                                    swipeScope.launch {
+                                        val settle = Animatable(dragOffset)
+                                        settle.animateTo(0f, tween(120)) { dragOffset = value }
+                                        dragOffset = 0f
+                                    }
+                                }
+                            }
+                        )
+                    } else CachedFullImage(uri, context)
                 }
 
                 if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = dragOffset + viewportWidth.toFloat() })
@@ -385,22 +436,15 @@ private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: 
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 val pressed = event.changes.filter { it.pressed }
                 if (pressed.isEmpty()) break
-
                 val centroid = pressed.map { it.position }.reduce { a, b -> a + b } / pressed.size.toFloat()
                 val pan = if (haveCentroid) centroid - previousCentroid else Offset.Zero
-                val span = if (pressed.size > 1) {
-                    pressed.map { (it.position - centroid).getDistance() }.average().toFloat()
-                } else 0f
-                val zoom = if (pressed.size > 1 && previousSpan > 0f) (span / previousSpan).coerceIn(0.85f, 1.15f) else 1f
-
+                val span = if (pressed.size > 1) pressed.map { (it.position - centroid).getDistance() }.average().toFloat() else 0f
+                val zoom = if (pressed.size > 1 && previousSpan > 0f) (span / previousSpan).coerceIn(0.5f, 2f) else 1f
                 onGesture(centroid, pan, zoom, pressed.size)
                 previousCentroid = centroid
                 previousSpan = span
                 haveCentroid = true
-
-                event.changes.forEach { change ->
-                    if (change.positionChanged()) change.consume()
-                }
+                event.changes.forEach { change -> if (change.positionChanged()) change.consume() }
             }
         }
     }
@@ -430,7 +474,7 @@ private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: 
     }
 }
 
-@Composable private fun VideoPlayer(uri: Uri, speed: Float) {
+@Composable private fun VideoPlayer(uri: Uri, speed: Float, onGesture: (panX: Float, panY: Float, zoom: Float, pointerCount: Int) -> Unit = { _, _, _, _ -> }, onGestureEnd: () -> Unit = {}) {
     val context = LocalContext.current
     var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
     var retryKey by remember(uri) { mutableIntStateOf(0) }
@@ -469,6 +513,57 @@ private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: 
             activePlayer = null
             runCatching { videoView.stopPlayback() }
         }
+    }
+    DisposableEffect(videoView, onGesture, onGestureEnd) {
+        var lastX = 0f
+        var lastY = 0f
+        var lastSpan = 0f
+        var multiTouch = false
+        videoView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    lastX = event.x
+                    lastY = event.y
+                    lastSpan = 0f
+                    multiTouch = false
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    multiTouch = true
+                    if (event.pointerCount >= 2) {
+                        val dx = event.getX(1) - event.getX(0)
+                        val dy = event.getY(1) - event.getY(0)
+                        lastSpan = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (event.pointerCount >= 2) {
+                        val dx = event.getX(1) - event.getX(0)
+                        val dy = event.getY(1) - event.getY(0)
+                        val span = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                        val zoom = if (lastSpan > 0f) (span / lastSpan).coerceIn(0.5f, 2f) else 1f
+                        if (lastSpan > 0f) onGesture(0f, 0f, zoom, event.pointerCount)
+                        lastSpan = span
+                    } else if (!multiTouch) {
+                        val panX = event.x - lastX
+                        val panY = event.y - lastY
+                        onGesture(panX, panY, 1f, 1)
+                        lastX = event.x
+                        lastY = event.y
+                    }
+                }
+                MotionEvent.ACTION_POINTER_UP -> {
+                    multiTouch = true
+                    lastSpan = 0f
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    onGestureEnd()
+                    multiTouch = false
+                    lastSpan = 0f
+                }
+            }
+            false
+        }
+        onDispose { videoView.setOnTouchListener(null) }
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })

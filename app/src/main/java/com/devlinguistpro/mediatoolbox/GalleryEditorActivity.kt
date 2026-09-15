@@ -75,7 +75,7 @@ class GalleryEditorActivity : ComponentActivity() {
         setContent { MaterialTheme { GalleryEditor(uri, ::saveEdited, ::finish) } }
     }
 
-    private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean) {
+    private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean, cropLeft: Float, cropTop: Float, cropRight: Float, cropBottom: Float) {
         if (!saving.compareAndSet(false, true)) return
         Thread {
             var outputUri: Uri? = null
@@ -83,7 +83,7 @@ class GalleryEditorActivity : ComponentActivity() {
             var edited: Bitmap? = null
             try {
                 source = decodeUriScaled(contentResolver, sourceUri, 4096) ?: throw IOException("Could not read source photo")
-                edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
+                edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom)
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${System.currentTimeMillis()}.jpg")
                     put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
@@ -116,7 +116,7 @@ class GalleryEditorActivity : ComponentActivity() {
 }
 
 @Composable
-private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Boolean, Boolean) -> Unit, onCancel: () -> Unit) {
+private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Boolean, Boolean, Float, Float, Float, Float) -> Unit, onCancel: () -> Unit) {
     val context = LocalContext.current
     var originalPreview by remember { mutableStateOf<Bitmap?>(null) }
     var preview by remember { mutableStateOf<Bitmap?>(null) }
@@ -127,6 +127,10 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
     var rotation by remember { mutableFloatStateOf(0f) }
     var flipHorizontal by remember { mutableStateOf(false) }
     var flipVertical by remember { mutableStateOf(false) }
+    var cropLeft by remember { mutableFloatStateOf(0f) }
+    var cropTop by remember { mutableFloatStateOf(0f) }
+    var cropRight by remember { mutableFloatStateOf(1f) }
+    var cropBottom by remember { mutableFloatStateOf(1f) }
 
     LaunchedEffect(uri) {
         loading = true
@@ -138,9 +142,9 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
         loading = false
     }
 
-    LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) {
+    LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) {
         val source = originalPreview ?: return@LaunchedEffect
-        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }.getOrNull() }
+        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) }.getOrNull() }
         preview?.let { old -> if (!old.isRecycled && old !== generated) old.recycle() }
         preview = generated
     }
@@ -157,7 +161,7 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
                 Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }, enabled = !loading && preview != null) {
+                Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) }, enabled = !loading && preview != null) {
                     Icon(Icons.Default.Check, "Save"); Spacer(Modifier.size(5.dp)); Text("Save")
                 }
             }
@@ -182,7 +186,17 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                     Button(onClick = { flipVertical = !flipVertical }) { Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V") }
                 }
                 Spacer(Modifier.height(6.dp))
-                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
+                Text("Crop", color = Color.White, fontWeight = FontWeight.SemiBold)
+                Text("Left", color = Color.LightGray, fontSize = 12.sp)
+                Slider(value = cropLeft, onValueChange = { cropLeft = it.coerceAtMost(cropRight - 0.05f) }, valueRange = 0f..0.75f)
+                Text("Top", color = Color.LightGray, fontSize = 12.sp)
+                Slider(value = cropTop, onValueChange = { cropTop = it.coerceAtMost(cropBottom - 0.05f) }, valueRange = 0f..0.75f)
+                Text("Right", color = Color.LightGray, fontSize = 12.sp)
+                Slider(value = cropRight, onValueChange = { cropRight = it.coerceAtLeast(cropLeft + 0.05f) }, valueRange = 0.25f..1f)
+                Text("Bottom", color = Color.LightGray, fontSize = 12.sp)
+                Slider(value = cropBottom, onValueChange = { cropBottom = it.coerceAtLeast(cropTop + 0.05f) }, valueRange = 0.25f..1f)
+                Spacer(Modifier.height(6.dp))
+                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false; cropLeft = 0f; cropTop = 0f; cropRight = 1f; cropBottom = 1f }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
             }
         }
     }
@@ -198,7 +212,7 @@ private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri,
     return resolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, options) }
 }
 
-private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean): Bitmap {
+private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean, cropLeft: Float = 0f, cropTop: Float = 0f, cropRight: Float = 1f, cropBottom: Float = 1f): Bitmap {
     val matrix = Matrix().apply { postRotate(rotation); postScale(if (flipHorizontal) -1f else 1f, if (flipVertical) -1f else 1f) }
     val transformed = Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     val output = Bitmap.createBitmap(transformed.width, transformed.height, Bitmap.Config.ARGB_8888)
@@ -211,5 +225,11 @@ private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, satur
     val paint = android.graphics.Paint().apply { colorFilter = ColorMatrixColorFilter(cm) }
     canvas.drawBitmap(transformed, 0f, 0f, paint)
     if (transformed !== source) transformed.recycle()
-    return output
+    val left = (output.width * cropLeft.coerceIn(0f, 0.95f)).toInt()
+    val top = (output.height * cropTop.coerceIn(0f, 0.95f)).toInt()
+    val right = (output.width * cropRight.coerceIn(0.05f, 1f)).toInt().coerceAtLeast(left + 1)
+    val bottom = (output.height * cropBottom.coerceIn(0.05f, 1f)).toInt().coerceAtLeast(top + 1)
+    val cropped = if (left == 0 && top == 0 && right == output.width && bottom == output.height) output else Bitmap.createBitmap(output, left, top, (right - left).coerceAtMost(output.width - left), (bottom - top).coerceAtMost(output.height - top))
+    if (cropped !== output) output.recycle()
+    return cropped
 }
