@@ -40,39 +40,45 @@ private fun CropOverlay(
     var dragTop = cropTop
     var dragRight = cropRight
     var dragBottom = cropBottom
-    var handleLeft = false
-    var handleRight = false
-    var handleTop = false
-    var handleBottom = false
 
     androidx.compose.foundation.Canvas(
         Modifier.fillMaxSize().pointerInput(cropLeft, cropTop, cropRight, cropBottom) {
-            androidx.compose.foundation.gestures.detectDragGestures(
-                onDragStart = { position ->
-                    val x = position.x / size.width
-                    val y = position.y / size.height
+            var activeHandle = 0
+            androidx.compose.foundation.gestures.detectTransformGestures { centroid, pan, _, _ ->
+                if (activeHandle == 0) {
+                    val x = centroid.x / size.width
+                    val y = centroid.y / size.height
                     val edge = 0.07f
-                    handleLeft = kotlin.math.abs(x - cropLeft) < edge
-                    handleRight = kotlin.math.abs(x - cropRight) < edge
-                    handleTop = kotlin.math.abs(y - cropTop) < edge
-                    handleBottom = kotlin.math.abs(y - cropBottom) < edge
+                    val nearLeft = kotlin.math.abs(x - cropLeft) < edge
+                    val nearRight = kotlin.math.abs(x - cropRight) < edge
+                    val nearTop = kotlin.math.abs(y - cropTop) < edge
+                    val nearBottom = kotlin.math.abs(y - cropBottom) < edge
+                    activeHandle = when {
+                        nearLeft -> 1
+                        nearRight -> 2
+                        nearTop -> 3
+                        nearBottom -> 4
+                        else -> 0
+                    }
                     dragLeft = cropLeft
                     dragTop = cropTop
                     dragRight = cropRight
                     dragBottom = cropBottom
-                },
-                onDrag = { change, _ ->
-                    if (!(handleLeft || handleRight || handleTop || handleBottom)) return@detectDragGestures
-                    val x = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val y = (change.position.y / size.height).coerceIn(0f, 1f)
-                    if (handleLeft) dragLeft = x.coerceIn(0f, dragRight - 0.05f)
-                    if (handleRight) dragRight = x.coerceIn(dragLeft + 0.05f, 1f)
-                    if (handleTop) dragTop = y.coerceIn(0f, dragBottom - 0.05f)
-                    if (handleBottom) dragBottom = y.coerceIn(dragTop + 0.05f, 1f)
-                    onChange(dragLeft, dragTop, dragRight, dragBottom)
-                    change.consume()
                 }
-            )
+
+                if (activeHandle != 0) {
+                    val dx = pan.x / size.width
+                    val dy = pan.y / size.height
+                    when (activeHandle) {
+                        1 -> dragLeft = (dragLeft + dx).coerceIn(0f, dragRight - 0.05f)
+                        2 -> dragRight = (dragRight + dx).coerceIn(dragLeft + 0.05f, 1f)
+                        3 -> dragTop = (dragTop + dy).coerceIn(0f, dragBottom - 0.05f)
+                        4 -> dragBottom = (dragBottom + dy).coerceIn(dragTop + 0.05f, 1f)
+                    }
+                    onChange(dragLeft, dragTop, dragRight, dragBottom)
+                }
+            }
+            activeHandle = 0
         }
     ) {
         val left = size.width * cropLeft
@@ -100,7 +106,7 @@ private fun CropOverlay(
     replace_once(marker, crop_overlay + marker, "crop overlay insertion")
 
 for imp in [
-    "import androidx.compose.foundation.gestures.detectDragGestures",
+    "import androidx.compose.foundation.gestures.detectTransformGestures",
     "import androidx.compose.ui.input.pointer.pointerInput",
 ]:
     if imp not in text:
@@ -111,11 +117,11 @@ checks = {
     "crop button": 'Text(if (cropMode) "Done Crop" else "Crop")' in text,
     "visible photo": 'Image(preview!!.asImageBitmap()' in text and 'if (cropMode)' in text,
     "crop rectangle": "CropOverlay(" in text and "drawRect(Color.White" in text,
-    "drag crop edges": "handleLeft" in text and "handleRight" in text and "handleTop" in text and "handleBottom" in text,
+    "drag crop edges": "activeHandle" in text and "nearLeft" in text and "nearRight" in text and "nearTop" in text and "nearBottom" in text,
     "crop processing": "Bitmap.createBitmap(output, left, top" in text,
 }
 failed = [k for k,v in checks.items() if not v]
 for k,v in checks.items(): print(("PASS " if v else "FAIL ") + k)
 if failed: raise SystemExit("CROP AUDIT FAILED: " + "; ".join(failed))
 path.write_text(text, encoding="utf-8")
-print("Gallery editor crop now uses a Compose-supported draggable crop frame and is safe to rerun on the generated editor source.")
+print("Gallery editor crop now uses a Compose-supported transform detector for edge dragging and is safe to rerun on the generated editor source.")
