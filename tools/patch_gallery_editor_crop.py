@@ -9,8 +9,6 @@ def replace_once(old: str, new: str, label: str):
         raise SystemExit(f"{label}: pattern not found")
     text = text.replace(old, new, 1)
 
-# The workflow keeps the generated editor source between builds, so this patch
-# accepts the previous slider implementation as input and is intentionally idempotent.
 if "var cropMode by remember" not in text:
     replace_once(
         '''    var flipHorizontal by remember { mutableStateOf(false) }\n    var flipVertical by remember { mutableStateOf(false) }''',
@@ -38,7 +36,45 @@ private fun CropOverlay(
     cropBottom: Float,
     onChange: (Float, Float, Float, Float) -> Unit
 ) {
-    androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+    var dragLeft = cropLeft
+    var dragTop = cropTop
+    var dragRight = cropRight
+    var dragBottom = cropBottom
+    var handleLeft = false
+    var handleRight = false
+    var handleTop = false
+    var handleBottom = false
+
+    androidx.compose.foundation.Canvas(
+        Modifier.fillMaxSize().pointerInput(cropLeft, cropTop, cropRight, cropBottom) {
+            androidx.compose.foundation.gestures.detectDragGestures(
+                onDragStart = { position ->
+                    val x = position.x / size.width
+                    val y = position.y / size.height
+                    val edge = 0.07f
+                    handleLeft = kotlin.math.abs(x - cropLeft) < edge
+                    handleRight = kotlin.math.abs(x - cropRight) < edge
+                    handleTop = kotlin.math.abs(y - cropTop) < edge
+                    handleBottom = kotlin.math.abs(y - cropBottom) < edge
+                    dragLeft = cropLeft
+                    dragTop = cropTop
+                    dragRight = cropRight
+                    dragBottom = cropBottom
+                },
+                onDrag = { change, _ ->
+                    if (!(handleLeft || handleRight || handleTop || handleBottom)) return@detectDragGestures
+                    val x = (change.position.x / size.width).coerceIn(0f, 1f)
+                    val y = (change.position.y / size.height).coerceIn(0f, 1f)
+                    if (handleLeft) dragLeft = x.coerceIn(0f, dragRight - 0.05f)
+                    if (handleRight) dragRight = x.coerceIn(dragLeft + 0.05f, 1f)
+                    if (handleTop) dragTop = y.coerceIn(0f, dragBottom - 0.05f)
+                    if (handleBottom) dragBottom = y.coerceIn(dragTop + 0.05f, 1f)
+                    onChange(dragLeft, dragTop, dragRight, dragBottom)
+                    change.consume()
+                }
+            )
+        }
+    ) {
         val left = size.width * cropLeft
         val top = size.height * cropTop
         val right = size.width * cropRight
@@ -57,37 +93,6 @@ private fun CropOverlay(
             drawLine(Color.White, point.copy(x = point.x + if (point.x == left) handle else -handle), point, strokeWidth = handleStroke)
             drawLine(Color.White, point.copy(y = point.y + if (point.y == top) handle else -handle), point, strokeWidth = handleStroke)
         }
-    }.pointerInput(cropLeft, cropTop, cropRight, cropBottom) {
-        awaitPointerEventScope {
-            while (true) {
-                val down = awaitFirstDown(requireUnconsumed = false)
-                val x = down.position.x / size.width
-                val y = down.position.y / size.height
-                val edge = 0.07f
-                val nearLeft = kotlin.math.abs(x - cropLeft) < edge
-                val nearRight = kotlin.math.abs(x - cropRight) < edge
-                val nearTop = kotlin.math.abs(y - cropTop) < edge
-                val nearBottom = kotlin.math.abs(y - cropBottom) < edge
-                if (!(nearLeft || nearRight || nearTop || nearBottom)) continue
-                var left = cropLeft
-                var top = cropTop
-                var right = cropRight
-                var bottom = cropBottom
-                while (true) {
-                    val event = awaitPointerEvent()
-                    val change = event.changes.firstOrNull() ?: break
-                    if (!change.pressed) break
-                    val px = (change.position.x / size.width).coerceIn(0f, 1f)
-                    val py = (change.position.y / size.height).coerceIn(0f, 1f)
-                    if (nearLeft) left = px.coerceIn(0f, right - 0.05f)
-                    if (nearRight) right = px.coerceIn(left + 0.05f, 1f)
-                    if (nearTop) top = py.coerceIn(0f, bottom - 0.05f)
-                    if (nearBottom) bottom = py.coerceIn(top + 0.05f, 1f)
-                    onChange(left, top, right, bottom)
-                    change.consume()
-                }
-            }
-        }
     }
 }
 
@@ -95,7 +100,7 @@ private fun CropOverlay(
     replace_once(marker, crop_overlay + marker, "crop overlay insertion")
 
 for imp in [
-    "import androidx.compose.foundation.gestures.awaitFirstDown",
+    "import androidx.compose.foundation.gestures.detectDragGestures",
     "import androidx.compose.ui.input.pointer.pointerInput",
 ]:
     if imp not in text:
@@ -106,11 +111,11 @@ checks = {
     "crop button": 'Text(if (cropMode) "Done Crop" else "Crop")' in text,
     "visible photo": 'Image(preview!!.asImageBitmap()' in text and 'if (cropMode)' in text,
     "crop rectangle": "CropOverlay(" in text and "drawRect(Color.White" in text,
-    "drag crop edges": "nearLeft" in text and "nearRight" in text and "nearTop" in text and "nearBottom" in text,
+    "drag crop edges": "handleLeft" in text and "handleRight" in text and "handleTop" in text and "handleBottom" in text,
     "crop processing": "Bitmap.createBitmap(output, left, top" in text,
 }
 failed = [k for k,v in checks.items() if not v]
 for k,v in checks.items(): print(("PASS " if v else "FAIL ") + k)
 if failed: raise SystemExit("CROP AUDIT FAILED: " + "; ".join(failed))
 path.write_text(text, encoding="utf-8")
-print("Gallery editor crop now uses an image-visible draggable crop frame and is safe to rerun on the generated editor source.")
+print("Gallery editor crop now uses a Compose-supported draggable crop frame and is safe to rerun on the generated editor source.")
