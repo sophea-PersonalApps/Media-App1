@@ -79,7 +79,7 @@ jobs:
               "camera pinch": "detectTransformGestures(panZoomLock = true)" in main and "var gestureZoom = cameraZoom" in main,
               "gallery stable viewer": ".pointerInput(uri, currentIndex)" in gallery and "detectTransformGestures" in gallery and "val focalX = centroid.x - viewportWidth / 2f" in gallery,
               "gallery NO swipe between media": "AdjacentMedia(" not in gallery and "swipeOffset" not in gallery and "videoNavigationStarted" not in gallery and "detectHorizontalDragGestures" not in gallery and "currentIndex + 1" not in gallery and "currentIndex - 1" not in gallery and "onNavigate(" not in gallery,
-              "gallery fixed media only": "MediaViewer(uri: Uri, isVideo: Boolean, items: List<MediaItem>, currentIndex: Int" in gallery,
+              "gallery fixed media only": "MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit)" in gallery,
               "gallery zoom pan": "mediaPanX" in gallery and "mediaPanY" in gallery and "mediaZoom" in gallery,
               "gallery video speed": "VideoPlayer(uri, videoSpeed)" in gallery,
               "gallery smooth pinch": "coerceIn(0.5f, 2f)" in gallery and "val scaleRatio = if (oldZoom > 0f) newZoom / oldZoom else 1f" in gallery,
