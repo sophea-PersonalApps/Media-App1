@@ -3,7 +3,7 @@ name: Android Debug APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, gallery-fix ]
 
 permissions:
   contents: write
@@ -50,16 +50,10 @@ jobs:
               "startActivity(Intent(this, QrScannerActivity::class.java))",
           ]
           missing = [item for item in required if item not in text]
-          forbidden = [
-              "onOpenCamera = ::openCamera",
-              "onOpenGallery = ::openGallery",
-              "onOpenQr = ::openQr",
-          ]
+          forbidden = ["onOpenCamera = ::openCamera", "onOpenGallery = ::openGallery", "onOpenQr = ::openQr"]
           present_forbidden = [item for item in forbidden if item in text]
-          if missing:
-              raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
-          if present_forbidden:
-              raise SystemExit("Scanner source contains unresolved navigation callbacks: " + repr(present_forbidden))
+          if missing: raise SystemExit("Scanner source is incomplete; missing: " + repr(missing))
+          if present_forbidden: raise SystemExit("Scanner source contains unresolved navigation callbacks: " + repr(present_forbidden))
           PY
 
       - name: Verify camera source wiring
@@ -69,24 +63,22 @@ jobs:
           from pathlib import Path
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
           required = [
-              "currentLens: Int,",
-              "mode: CameraSectionMode",
-              "CameraSectionControls(",
-              "CameraSectionBottomNavigation(",
-              "CameraSectionMode.SCAN",
-              "CameraSectionMode.QR",
+              "currentLens: Int,", "mode: CameraSectionMode", "CameraSectionControls(",
+              "CameraSectionBottomNavigation(", "CameraSectionMode.SCAN", "CameraSectionMode.QR",
               "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
           ]
           missing = [item for item in required if item not in text]
           if missing: raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
           PY
 
-      - name: Apply camera build-safe source fix
+      - name: Apply build-safe source fixes
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
           text = camera.read_text(encoding="utf-8")
           text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
@@ -94,6 +86,135 @@ jobs:
           if "private fun updateCameraZoom(value: Float)" not in text:
               raise SystemExit("Camera zoom function fix was not applied")
           camera.write_text(text, encoding="utf-8")
+
+          gallery = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt")
+          text = gallery.read_text(encoding="utf-8")
+          if "import androidx.compose.ui.input.pointer.pointerInput" not in text:
+              text = text.replace("import androidx.compose.ui.graphics.graphicsLayer\n", "import androidx.compose.ui.graphics.graphicsLayer\nimport androidx.compose.ui.input.pointer.pointerInput\n")
+          if "import androidx.compose.foundation.layout.weight" not in text:
+              text = text.replace("import androidx.compose.foundation.layout.*\n", "import androidx.compose.foundation.layout.*\nimport androidx.compose.foundation.layout.weight\n")
+
+          start = text.index("@Composable private fun MediaViewer(")
+          end = text.index("private enum class VideoLoadState", start)
+          replacement = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
+              var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
+              Surface(Modifier.fillMaxSize(), color = Color.Black) {
+                  Column(Modifier.fillMaxSize()) {
+                      Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                          IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+                          Spacer(Modifier.weight(1f))
+                          IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
+                          onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
+                          IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
+                      }
+                      Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                          if (isVideo) VideoPlayer(uri) else ZoomablePhoto(uri)
+                      }
+                  }
+                  if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+              }
+          }
+
+          @Composable private fun ZoomablePhoto(uri: Uri) {
+              val context = LocalContext.current
+              var bitmap by remember(uri) { mutableStateOf<Bitmap?>(null) }
+              var scale by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+              var offsetX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+              var offsetY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+              LaunchedEffect(uri) { bitmap = withContext(Dispatchers.IO) { loadFullImage(context, uri) } }
+              bitmap?.let { image ->
+                  Box(Modifier.fillMaxSize().pointerInput(uri) {
+                      detectTransformGestures { _, pan, zoom, _ ->
+                          val nextScale = (scale * zoom).coerceIn(1f, 8f)
+                          scale = nextScale
+                          if (nextScale <= 1.001f) { offsetX = 0f; offsetY = 0f }
+                          else {
+                              offsetX += pan.x
+                              offsetY += pan.y
+                          }
+                      }
+                  }, contentAlignment = Alignment.Center) {
+                      Image(image.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp).graphicsLayer {
+                          scaleX = scale
+                          scaleY = scale
+                          translationX = offsetX
+                          translationY = offsetY
+                      }, contentScale = ContentScale.Fit)
+                  }
+              } ?: CircularProgressIndicator(color = Color.White)
+          }
+
+          @Composable private fun VideoPlayer(uri: Uri) {
+              val context = LocalContext.current
+              var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
+              var retryKey by remember(uri) { mutableIntStateOf(0) }
+              var speed by remember(uri) { mutableFloatStateOf(1f) }
+              var speedMenuOpen by remember(uri) { mutableStateOf(false) }
+              var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
+              var videoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+              var videoOffsetX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+              var videoOffsetY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+              val videoView = remember(uri) { VideoView(context).apply {
+                  layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                  isFocusable = true
+                  isFocusableInTouchMode = true
+                  setMediaController(MediaController(context).also { it.setAnchorView(this) })
+              } }
+              val scaleDetector = remember(videoView) { android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                  override fun onScale(detector: android.view.ScaleGestureDetector): Boolean {
+                      videoZoom = (videoZoom * detector.scaleFactor).coerceIn(1f, 5f)
+                      if (videoZoom <= 1.001f) { videoOffsetX = 0f; videoOffsetY = 0f }
+                      videoView.scaleX = videoZoom
+                      videoView.scaleY = videoZoom
+                      videoView.translationX = videoOffsetX
+                      videoView.translationY = videoOffsetY
+                      return true
+                  }
+              }) }
+              DisposableEffect(videoView, scaleDetector) {
+                  videoView.setOnTouchListener { _, event ->
+                      if (event.pointerCount >= 2 || scaleDetector.isInProgress) scaleDetector.onTouchEvent(event)
+                      false
+                  }
+                  onDispose {
+                      videoView.setOnTouchListener(null)
+                      activePlayer = null
+                      runCatching { videoView.stopPlayback() }
+                  }
+              }
+              LaunchedEffect(uri, retryKey) {
+                  state = VideoLoadState.LOADING
+                  activePlayer = null
+                  videoView.setOnPreparedListener { player ->
+                      activePlayer = player
+                      player.isLooping = false
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) player.playbackParams = player.playbackParams.apply { this.speed = speed }
+                      state = VideoLoadState.READY
+                      videoView.requestFocus()
+                      player.start()
+                  }
+                  videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }
+                  videoView.setOnErrorListener { _, _, _ -> activePlayer = null; state = VideoLoadState.ERROR; true }
+                  videoView.setVideoURI(uri)
+                  videoView.requestFocus()
+              }
+              Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                  AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })
+                  when (state) {
+                      VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White)
+                      VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { Text("Could not play this video", color = Color.White, fontSize = 16.sp); Spacer(Modifier.height(10.dp)); Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") } }
+                      VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit
+                  }
+                  if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                      Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }
+                      DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed -> DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { speed = selectedSpeed; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed } } }; speedMenuOpen = false }) } }
+                  }
+              }
+          }
+
+          '''
+          text = text[:start] + replacement + text[end:]
+          gallery.write_text(text, encoding="utf-8")
           PY
 
       - name: Build debug APK
@@ -127,19 +248,8 @@ jobs:
           RELEASE_TAG="media-toolbox-debug"
           APK="app/build/outputs/apk/debug/app-debug.apk"
           APK_NAME="MediaToolbox-debug.apk"
-
           if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" \
-              --target "$GITHUB_SHA" \
-              --title "Media Toolbox Debug APK" \
-              --notes "Latest debug APK built from main." \
-              --prerelease
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Media Toolbox Debug APK" --notes "Latest debug APK built from the tested gallery-fix branch." --prerelease
           fi
-
           gh release upload "$RELEASE_TAG" "$APK#$APK_NAME" --clobber
-
-          echo ""
-          echo "============================================================"
-          echo "DIRECT APK DOWNLOAD"
-          echo "https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
-          echo "============================================================"
+          echo "DIRECT APK DOWNLOAD: https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
