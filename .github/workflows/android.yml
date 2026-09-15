@@ -91,6 +91,9 @@ jobs:
           if "import androidx.compose.ui.input.pointer.pointerInput" not in text:
               text = text.replace("import androidx.compose.ui.graphics.graphicsLayer\n", "import androidx.compose.ui.graphics.graphicsLayer\nimport androidx.compose.ui.input.pointer.pointerInput\n")
 
+          # MediaGrid uses Modifier.weight(1f), so give it a ColumnScope receiver.
+          text = text.replace("@Composable\nprivate fun MediaGrid(", "@Composable\nprivate fun ColumnScope.MediaGrid(")
+
           start = text.index("@Composable private fun MediaViewer(")
           end = text.index("private enum class VideoLoadState", start)
           replacement = r'''@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
@@ -99,7 +102,7 @@ jobs:
                   Column(Modifier.fillMaxSize()) {
                       Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                           IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                          Spacer(Modifier.weight(1f))
+                          Spacer(Modifier.width(8.dp))
                           IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
                           onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
                           IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
@@ -249,4 +252,4 @@ jobs:
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --title "Media Toolbox Debug APK" --notes "Latest debug APK built from the tested gallery-fix branch." --prerelease
           fi
           gh release upload "$RELEASE_TAG" "$APK#$APK_NAME" --clobber
-          echo "DIRECT APK DOWNLOAD: https://github.com/devLinguistPro/media-toolbox/releases/download/$RELEASE_TAG/$APK_NAME"
+          echo "DIRECT APK DOWNLOAD: https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG/$APK_NAME"
