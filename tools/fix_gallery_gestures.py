@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 p=Path('app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryActivity.kt')
 t=p.read_text(encoding='utf-8')
@@ -24,8 +25,17 @@ if any(x in t for x in ['selectedIndex','currentIndex','onNavigate(','detectHori
 p.write_text(t,encoding='utf-8')
 
 ep=Path('app/src/main/java/com/devlinguistpro/mediatoolbox/GalleryEditorActivity.kt');et=ep.read_text(encoding='utf-8')
-if 'import androidx.compose.foundation.gestures.detectDragGestures' not in et:et=et.replace('import androidx.compose.foundation.layout.*','import androidx.compose.foundation.gestures.detectDragGestures\nimport androidx.compose.foundation.layout.*',1)
-et=et.replace('androidx.compose.foundation.gestures.detectTransformGestures { centroid, pan, _, _ ->','detectDragGestures { change, dragAmount ->\n            val centroid = change.position\n            val pan = dragAmount').replace('detectTransformGestures { centroid, pan, _, _ ->','detectDragGestures { change, dragAmount ->\n            val centroid = change.position\n            val pan = dragAmount')
+# Crop is a one-finger drag interaction. Earlier crop code used transform gestures,
+# and that is the specific overlap that caused the last 13-second failure.
+et=et.replace('import androidx.compose.foundation.gestures.detectTransformGestures','import androidx.compose.foundation.gestures.detectDragGestures')
+et=et.replace('androidx.compose.foundation.gestures.detectTransformGestures','detectTransformGestures')
+# Handle the exact old callback form used by the crop overlay.
+et=et.replace('detectTransformGestures { centroid, pan, _, _ ->','detectDragGestures { change, dragAmount ->\n            val centroid = change.position\n            val pan = dragAmount')
+et=et.replace('detectTransformGestures { centroid, pan, _, _ ->','detectDragGestures { change, dragAmount ->\n            val centroid = change.position\n            val pan = dragAmount')
+# If the generated source has a transform callback with a different parameter list,
+# replace the detector/callback header without touching the crop body.
+et=re.sub(r'detectTransformGestures\s*\{\s*centroid\s*,\s*pan\s*,[^\n]*?->', 'detectDragGestures { change, dragAmount ->\n            val centroid = change.position\n            val pan = dragAmount', et)
 if 'detectTransformGestures' in et:raise SystemExit('crop transform detector remains')
+if 'detectDragGestures' not in et:raise SystemExit('crop drag detector missing')
 ep.write_text(et,encoding='utf-8')
 print('PASS final gallery/crop generation')
