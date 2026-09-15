@@ -9,24 +9,27 @@ def replace_once(old: str, new: str, label: str):
         raise SystemExit(f"{label}: pattern not found")
     text = text.replace(old, new, 1)
 
-replace_once('''private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean) {''', '''private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean, cropLeft: Float, cropTop: Float, cropRight: Float, cropBottom: Float) {''', "save callback signature")
-replace_once('''edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)''', '''edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom)''', "save crop arguments")
-replace_once('''private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Boolean, Boolean) -> Unit, onCancel: () -> Unit) {''', '''private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Boolean, Boolean, Float, Float, Float, Float) -> Unit, onCancel: () -> Unit) {''', "editor callback signature")
-replace_once('''    var flipHorizontal by remember { mutableStateOf(false) }\n    var flipVertical by remember { mutableStateOf(false) }''', '''    var flipHorizontal by remember { mutableStateOf(false) }\n    var flipVertical by remember { mutableStateOf(false) }\n    var cropMode by remember { mutableStateOf(false) }\n    var cropLeft by remember { mutableFloatStateOf(0f) }\n    var cropTop by remember { mutableFloatStateOf(0f) }\n    var cropRight by remember { mutableFloatStateOf(1f) }\n    var cropBottom by remember { mutableFloatStateOf(1f) }''', "crop state")
-replace_once('''LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) {''', '''LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) {''', "crop preview effect")
-replace_once('''val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }.getOrNull() }''', '''val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) }.getOrNull() }''', "crop preview transform")
-replace_once('''Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }, enabled = !loading && preview != null) {''', '''Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical, cropLeft, cropTop, cropRight, cropBottom) }, enabled = !loading && preview != null) {''', "save crop values")
+# The workflow keeps the generated editor source between builds, so this patch
+# accepts the previous slider implementation as input and is intentionally idempotent.
+if "var cropMode by remember" not in text:
+    replace_once(
+        '''    var flipHorizontal by remember { mutableStateOf(false) }\n    var flipVertical by remember { mutableStateOf(false) }''',
+        '''    var flipHorizontal by remember { mutableStateOf(false) }\n    var flipVertical by remember { mutableStateOf(false) }\n    var cropMode by remember { mutableStateOf(false) }''',
+        "crop mode state",
+    )
 
-old_controls = '''                Spacer(Modifier.height(6.dp))\n                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }'''
-new_controls = '''                Spacer(Modifier.height(6.dp))\n                Button(onClick = { cropMode = !cropMode }, modifier = Modifier.fillMaxWidth()) { Text(if (cropMode) "Done Crop" else "Crop") }\n                Spacer(Modifier.height(6.dp))\n                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false; cropMode = false; cropLeft = 0f; cropTop = 0f; cropRight = 1f; cropBottom = 1f }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }'''
-replace_once(old_controls, new_controls, "crop button")
+if 'Text(if (cropMode) "Done Crop" else "Crop")' not in text:
+    old_controls = '''                Spacer(Modifier.height(6.dp))\n                Text("Crop", color = Color.White, fontWeight = FontWeight.SemiBold)\n                Text("Left", color = Color.LightGray, fontSize = 12.sp)\n                Slider(value = cropLeft, onValueChange = { cropLeft = it.coerceAtMost(cropRight - 0.05f) }, valueRange = 0f..0.75f)\n                Text("Top", color = Color.LightGray, fontSize = 12.sp)\n                Slider(value = cropTop, onValueChange = { cropTop = it.coerceAtMost(cropBottom - 0.05f) }, valueRange = 0f..0.75f)\n                Text("Right", color = Color.LightGray, fontSize = 12.sp)\n                Slider(value = cropRight, onValueChange = { cropRight = it.coerceAtLeast(cropLeft + 0.05f) }, valueRange = 0.25f..1f)\n                Text("Bottom", color = Color.LightGray, fontSize = 12.sp)\n                Slider(value = cropBottom, onValueChange = { cropBottom = it.coerceAtLeast(cropTop + 0.05f) }, valueRange = 0.25f..1f)\n                Spacer(Modifier.height(6.dp))\n                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false; cropLeft = 0f; cropTop = 0f; cropRight = 1f; cropBottom = 1f }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }'''
+    new_controls = '''                Spacer(Modifier.height(6.dp))\n                Button(onClick = { cropMode = !cropMode }, modifier = Modifier.fillMaxWidth()) { Text(if (cropMode) "Done Crop" else "Crop") }\n                Spacer(Modifier.height(6.dp))\n                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false; cropMode = false; cropLeft = 0f; cropTop = 0f; cropRight = 1f; cropBottom = 1f }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }'''
+    replace_once(old_controls, new_controls, "crop slider controls")
 
-old_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
-new_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> {\n                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {\n                            Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                            if (cropMode) {\n                                CropOverlay(cropLeft, cropTop, cropRight, cropBottom) { left, top, right, bottom ->\n                                    cropLeft = left\n                                    cropTop = top\n                                    cropRight = right\n                                    cropBottom = bottom\n                                }\n                            }\n                        }\n                    }\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
-replace_once(old_preview, new_preview, "crop preview")
+if "CropOverlay(" not in text:
+    old_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
+    new_preview = '''            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {\n                when {\n                    preview != null -> {\n                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {\n                            Image(preview!!.asImageBitmap(), "Edited photo", Modifier.fillMaxSize(), contentScale = ContentScale.Fit)\n                            if (cropMode) {\n                                CropOverlay(cropLeft, cropTop, cropRight, cropBottom) { left, top, right, bottom ->\n                                    cropLeft = left\n                                    cropTop = top\n                                    cropRight = right\n                                    cropBottom = bottom\n                                }\n                            }\n                        }\n                    }\n                    loading -> Text("Loading photo…", color = Color.LightGray)\n                    else -> Text("Photo could not be loaded", color = Color.LightGray)\n                }\n            }'''
+    replace_once(old_preview, new_preview, "crop preview")
 
-marker = '''private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri, maxSide: Int): Bitmap? {'''
-crop_overlay = r'''
+    marker = '''private fun decodeUriScaled(resolver: android.content.ContentResolver, uri: Uri, maxSide: Int): Bitmap? {'''
+    crop_overlay = r'''
 @Composable
 private fun CropOverlay(
     cropLeft: Float,
@@ -89,9 +92,14 @@ private fun CropOverlay(
 }
 
 '''
-replace_once(marker, crop_overlay + marker, "crop overlay insertion")
-replace_once('''private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean): Bitmap {''', '''private fun editBitmap(source: Bitmap, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean, cropLeft: Float = 0f, cropTop: Float = 0f, cropRight: Float = 1f, cropBottom: Float = 1f): Bitmap {''', "edit bitmap signature")
-replace_once('''    canvas.drawBitmap(transformed, 0f, 0f, paint)\n    if (transformed !== source) transformed.recycle()\n    return output''', '''    canvas.drawBitmap(transformed, 0f, 0f, paint)\n    if (transformed !== source) transformed.recycle()\n    val left = (output.width * cropLeft.coerceIn(0f, 0.95f)).toInt()\n    val top = (output.height * cropTop.coerceIn(0f, 0.95f)).toInt()\n    val right = (output.width * cropRight.coerceIn(0.05f, 1f)).toInt().coerceAtLeast(left + 1)\n    val bottom = (output.height * cropBottom.coerceIn(0.05f, 1f)).toInt().coerceAtLeast(top + 1)\n    val cropped = if (left == 0 && top == 0 && right == output.width && bottom == output.height) output else Bitmap.createBitmap(output, left, top, (right - left).coerceAtMost(output.width - left), (bottom - top).coerceAtMost(output.height - top))\n    if (cropped !== output) output.recycle()\n    return cropped''', "apply crop")
+    replace_once(marker, crop_overlay + marker, "crop overlay insertion")
+
+for imp in [
+    "import androidx.compose.foundation.gestures.awaitFirstDown",
+    "import androidx.compose.ui.input.pointer.pointerInput",
+]:
+    if imp not in text:
+        text = text.replace("import androidx.compose.foundation.Image", imp + "\nimport androidx.compose.foundation.Image", 1)
 
 checks = {
     "crop mode": "var cropMode by remember" in text,
@@ -105,4 +113,4 @@ failed = [k for k,v in checks.items() if not v]
 for k,v in checks.items(): print(("PASS " if v else "FAIL ") + k)
 if failed: raise SystemExit("CROP AUDIT FAILED: " + "; ".join(failed))
 path.write_text(text, encoding="utf-8")
-print("Gallery editor crop replaced with an image-visible crop mode using a draggable crop rectangle and edge/corner handles.")
+print("Gallery editor crop now uses an image-visible draggable crop frame and is safe to rerun on the generated editor source.")
