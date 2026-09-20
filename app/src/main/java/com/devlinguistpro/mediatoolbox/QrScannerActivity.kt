@@ -99,10 +99,10 @@ class QrScannerActivity : ComponentActivity() {
                     onScanAgain = { resultLocked.set(false); result = null },
                     onCopy = { copyResult(result) },
                     onOpen = { openResult(result) },
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
-                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
+                    onOpenScanner = { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(0, 0) }
                 )
             }
         }

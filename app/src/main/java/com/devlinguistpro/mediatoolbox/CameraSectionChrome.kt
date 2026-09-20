@@ -135,3 +135,21 @@ internal fun CameraSectionMore(onDismiss: () -> Unit, onOpenSettings: () -> Unit
         }
     }, confirmButton = { Button(onClick = onDismiss) { Text("Done") } })
 }
+@Composable
+internal fun ScannerBottomNavigation(pageCount: Int, onMore: () -> Unit, onCamera: () -> Unit, onPages: () -> Unit) {
+    Row(Modifier.fillMaxWidth().background(Color.Black).height(58.dp).navigationBarsPadding(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        NavigationItem("MORE", false, onMore)
+        NavigationItem("CAMERA", true, onCamera)
+        NavigationItem("PAGES ($pageCount)", false, onPages)
+    }
+}
+@Composable
+internal fun CameraModeStrip(selected: CameraSectionMode, onModeSelected: (CameraSectionMode) -> Unit) {
+    val modes = CameraSectionMode.entries
+    val selectedIndex = modes.indexOf(selected)
+    Row(Modifier.fillMaxWidth().background(Color.Black).padding(vertical = 8.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+        modes.getOrNull(selectedIndex - 1)?.let { Mode(it, false) { onModeSelected(it) }; Spacer(Modifier.width(18.dp)) }
+        Mode(selected, true) {}
+        modes.getOrNull(selectedIndex + 1)?.let { Spacer(Modifier.width(18.dp)); Mode(it, false) { onModeSelected(it) } }
+    }
+}

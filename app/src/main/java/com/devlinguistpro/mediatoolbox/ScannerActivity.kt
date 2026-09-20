@@ -98,6 +98,7 @@ class ScannerActivity : ComponentActivity() {
     private val pages = mutableStateListOf<String>()
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private var showingPreview by mutableStateOf(false)
+    private var moreOpen by mutableStateOf(false)
     private var selectedFolderName by mutableStateOf(MediaToolboxPrefs.DEFAULT_SCANNER_FOLDER)
     private var cameraPermissionGranted by mutableStateOf(false)
     private var cameraBindRequested = false
@@ -155,10 +156,11 @@ class ScannerActivity : ComponentActivity() {
                     onFlip = ::flipCamera,
                     onChooseFolder = { folderPicker.launch(null) },
                     onSave = ::savePdf,
-                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))) },
-                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))) },
-                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
-                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)) }
+                    onOpenCamera = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.PHOTO))); overridePendingTransition(0, 0) },
+                    onOpenVideo = { startActivity(Intent(this, MainActivity::class.java).putExtras(cameraModeIntent(CameraSectionMode.VIDEO))); overridePendingTransition(0, 0) },
+                    onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)); overridePendingTransition(0, 0) },
+                    onOpenQr = { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(0, 0) },
+                    onMore = { moreOpen = true }
                 )
             }
         }
@@ -362,13 +364,13 @@ private fun ScannerApp(
     pages: List<String>, hasCameraPermission: Boolean, showingPreview: Boolean, folderName: String, detectedQuad: DocumentDetector.Quad?,
     onRequestPermission: () -> Unit, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onDeletePage: (Int) -> Unit,
     onFinish: () -> Unit, onBack: () -> Unit, onBackToScanner: () -> Unit, onFlip: () -> Unit, onChooseFolder: () -> Unit, onSave: () -> Unit,
-    onOpenCamera: () -> Unit, onOpenVideo: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit
+    onOpenCamera: () -> Unit, onOpenVideo: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit, onMore: () -> Unit
 ) {
     Surface(Modifier.fillMaxSize(), color = ComposeColor.Black) {
         when {
             !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack)
             showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave, onOpenCamera, onOpenGallery, onOpenQr)
-            else -> ScannerCapture(pages, detectedQuad, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip, onOpenCamera, onOpenVideo, onOpenGallery, onOpenQr)
+            else -> ScannerCapture(pages, detectedQuad, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip, onOpenCamera, onOpenVideo, onOpenGallery, onOpenQr, onMore)
         }
     }
 }
@@ -393,7 +395,7 @@ private fun scannerModeAction(context: android.content.Context, mode: CameraSect
 @Composable
 private fun ScannerCapture(
     pages: List<String>, detectedQuad: DocumentDetector.Quad?, onPreviewReady: (PreviewView) -> Unit, onCapture: () -> Unit, onDelete: (Int) -> Unit,
-    onFinish: () -> Unit, onBack: () -> Unit, onFlip: () -> Unit, onOpenCamera: () -> Unit, onOpenVideo: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit
+    onFinish: () -> Unit, onBack: () -> Unit, onFlip: () -> Unit, onOpenCamera: () -> Unit, onOpenVideo: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit, onMore: () -> Unit
 ) {
     val context = LocalContext.current
     Box(Modifier.fillMaxSize().background(ComposeColor.Black)) {
@@ -420,15 +422,16 @@ private fun ScannerCapture(
                     Spacer(Modifier.size(18.dp)); Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
                 }
                 Spacer(Modifier.height(8.dp))
-                CameraSectionControls(
-                    mode = CameraSectionMode.SCAN,
-                    onModeSelected = { scannerModeAction(context, it) },
-                    onPrimaryAction = onCapture,
-                    onFlip = onFlip,
-                    onMore = { },
-                    primaryEnabled = true
+                CameraModeStrip(
+                    selected = CameraSectionMode.SCAN,
+                    onModeSelected = { scannerModeAction(context, it) }
                 )
-                CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+                ScannerBottomNavigation(
+                    pageCount = pages.size,
+                    onMore = onMore,
+                    onCamera = onOpenCamera,
+                    onPages = { if (pages.isNotEmpty()) onFinish() }
+                )
             }
         }
     }
@@ -453,7 +456,7 @@ private fun ScannerPreview(
                 Icon(Icons.Default.Folder, "PDF folder", tint = ComposeColor.White); Spacer(Modifier.size(8.dp)); Text(folderName, color = ComposeColor.White, maxLines = 1, modifier = Modifier.weight(1f)); Button(onClick = onChooseFolder) { Text("Choose") }
             }
             Spacer(Modifier.height(10.dp)); Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) { Icon(Icons.Default.PictureAsPdf, "Save PDF"); Spacer(Modifier.size(8.dp)); Text("Save PDF") }
-            Spacer(Modifier.height(8.dp)); CameraSectionBottomNavigation(cameraSelected = true, onCamera = onOpenCamera, onGallery = onOpenGallery)
+            Spacer(Modifier.height(8.dp)); ScannerBottomNavigation(pageCount = pages.size, onMore = onMore, onCamera = onOpenCamera, onPages = { if (pages.isNotEmpty()) onBackToScanner() })
         }
     }
 }
