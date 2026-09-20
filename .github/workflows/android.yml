@@ -56,36 +56,6 @@ jobs:
           if present_forbidden: raise SystemExit("Scanner source contains unresolved navigation callbacks: " + repr(present_forbidden))
           PY
 
-      - name: Verify camera source wiring
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt").read_text(encoding="utf-8")
-          required = [
-              "currentLens: Int,", "mode: CameraSectionMode", "CameraSectionControls(",
-              "CameraSectionBottomNavigation(", "CameraSectionMode.SCAN", "CameraSectionMode.QR",
-              "scaleType = if (currentLens == CameraSelector.LENS_FACING_FRONT)",
-          ]
-          missing = [item for item in required if item not in text]
-          if missing: raise SystemExit("Camera source wiring is incomplete; missing: " + repr(missing))
-          PY
-
-      - name: Apply camera build-safe source fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          camera = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/MainActivity.kt")
-          text = camera.read_text(encoding="utf-8")
-          text = text.replace("onZoom = ::setCameraZoom", "onZoom = ::updateCameraZoom")
-          text = text.replace("private fun setCameraZoom(value: Float)", "private fun updateCameraZoom(value: Float)")
-          if "private fun updateCameraZoom(value: Float)" not in text:
-              raise SystemExit("Camera zoom function fix was not applied")
-          camera.write_text(text, encoding="utf-8")
-          PY
-
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
 

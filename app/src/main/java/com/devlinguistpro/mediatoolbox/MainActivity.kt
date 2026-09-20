@@ -28,7 +28,6 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -124,7 +123,7 @@ class MainActivity : ComponentActivity() {
                     onOpenGallery = { startActivity(Intent(this, GalleryActivity::class.java)) },
                     onOpenSettings = { startActivity(Intent(this, SettingsActivity::class.java)) },
                     onCycleFlash = ::cycleFlash,
-                    onZoom = ::setCameraZoom,
+                    onZoom = ::updateCameraZoom,
                     onModeChanged = ::changeMode
                 )
             }
@@ -174,8 +173,8 @@ class MainActivity : ComponentActivity() {
                 cameraZoom = 1f
                 bindCamera(forceRebind = true)
             }
-            CameraSectionMode.SCAN -> startActivity(Intent(this, ScannerActivity::class.java))
-            CameraSectionMode.QR -> startActivity(Intent(this, QrScannerActivity::class.java))
+            CameraSectionMode.SCAN -> { startActivity(Intent(this, ScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
+            CameraSectionMode.QR -> { startActivity(Intent(this, QrScannerActivity::class.java)); overridePendingTransition(R.anim.slide_in_right, R.anim.slide_out_left) }
         }
     }
 
@@ -268,7 +267,7 @@ class MainActivity : ComponentActivity() {
         }, ContextCompat.getMainExecutor(this))
     }
 
-    private fun setCameraZoom(value: Float) {
+    private fun updateCameraZoom(value: Float) {
         if (currentMode != CameraSectionMode.PHOTO && currentMode != CameraSectionMode.VIDEO) return
         val maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 10f
         cameraZoom = value.coerceIn(1f, maxZoom)
@@ -440,18 +439,24 @@ private fun CameraScreen(
             modifier = Modifier.fillMaxSize()
         )
         if (showCaptureFlash && mode == CameraSectionMode.PHOTO) Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = 0.88f)))
-        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode) {
-            var drag = 0f
-            detectHorizontalDragGestures(onHorizontalDrag = { _, amount -> drag += amount }, onDragEnd = {
-                when { drag < -80f && selectedIndex < modes.lastIndex -> onModeChanged(modes[selectedIndex + 1]); drag > 80f && selectedIndex > 0 -> onModeChanged(modes[selectedIndex - 1]) }
-                drag = 0f
-            })
+        Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
+            var horizontalDrag = 0f
+            var gestureZoom = cameraZoom
+            detectTransformGestures(panZoomLock = true) { _, pan, zoom, _ ->
+                val cameraMode = mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO
+                if (cameraMode && kotlin.math.abs(zoom - 1f) > 0.001f) {
+                    gestureZoom = (gestureZoom * zoom).coerceIn(1f, 10f)
+                    onZoom(gestureZoom)
+                    horizontalDrag = 0f
+                } else if (kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                    horizontalDrag += pan.x
+                    when {
+                        horizontalDrag <= -80f && selectedIndex < modes.lastIndex -> { onModeChanged(modes[selectedIndex + 1]); horizontalDrag = 0f }
+                        horizontalDrag >= 80f && selectedIndex > 0 -> { onModeChanged(modes[selectedIndex - 1]); horizontalDrag = 0f }
+                    }
+                }
+            }
         })
-        if (mode == CameraSectionMode.PHOTO || mode == CameraSectionMode.VIDEO) {
-            Box(Modifier.fillMaxWidth().fillMaxHeight(0.72f).align(Alignment.TopCenter).pointerInput(mode, currentLens) {
-                detectTransformGestures { _, _, zoom, _ -> onZoom(cameraZoom * zoom) }
-            })
-        }
         Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.Bottom) {
             Spacer(Modifier.weight(1f))
             CameraSectionControls(

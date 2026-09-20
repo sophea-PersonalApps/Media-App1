@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -46,16 +47,21 @@ internal fun CameraSectionControls(
     onFlip: () -> Unit,
     onMore: () -> Unit,
     primaryEnabled: Boolean = true,
-    isRecording: Boolean = false
+    isRecording: Boolean = false,
+    scannerPageCount: Int = 0
 ) {
     val modes = CameraSectionMode.entries
     val selectedIndex = modes.indexOf(mode)
+    val rightLabel = if (mode == CameraSectionMode.SCAN) "PAGES ($scannerPageCount)" else "FLIP"
     Box(Modifier.fillMaxWidth().background(Color.Black.copy(alpha = 0.82f))) {
         Column(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 22.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Control("MORE", { Icon(Icons.Default.MoreVert, "More", tint = Color.White) }, onMore)
                 Shutter(mode, isRecording, primaryEnabled, onPrimaryAction)
-                Control("FLIP", { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White) }, onFlip)
+                Control(rightLabel, {
+                    if (mode == CameraSectionMode.SCAN) Icon(Icons.Default.Folder, "Pages", tint = Color.White)
+                    else Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = Color.White)
+                }, onFlip)
             }
             if (mode == CameraSectionMode.VIDEO && isRecording) {
                 Row(Modifier.fillMaxWidth().padding(top = 6.dp, bottom = 2.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {

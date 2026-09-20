@@ -33,9 +33,17 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import kotlinx.coroutines.launch
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.pointer.positionChanged
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.gestures.detectTransformGestures
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -48,6 +56,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -66,14 +75,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.davemorrissey.labs.subscaleview.ImageSource
-import com.davemorrissey.labs.subscaleview.SubsamplingScaleImageView
 import androidx.core.content.ContextCompat
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.coroutines.Dispatchers
@@ -89,6 +98,9 @@ private object ThumbnailMemoryCache {
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_BYTES) { override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount }
     fun get(uri: Uri, isVideo: Boolean): Bitmap? = cache.get("$isVideo|$uri")
     fun put(uri: Uri, isVideo: Boolean, bitmap: Bitmap): Bitmap { cache.put("$isVideo|$uri", bitmap); return bitmap }
+    private const val FULL_PREFIX = "full|"
+    fun getFull(uri: Uri): Bitmap? = cache.get(FULL_PREFIX + uri)
+    fun putFull(uri: Uri, bitmap: Bitmap): Bitmap { cache.put(FULL_PREFIX + uri, bitmap); return bitmap }
 }
 
 class GalleryActivity : ComponentActivity() {
@@ -142,11 +154,15 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
     var selectedAlbumName by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedUri by rememberSaveable { mutableStateOf<Uri?>(null) }
     var selectedIsVideo by rememberSaveable { mutableStateOf(false) }
+    var selectedIndex by rememberSaveable { mutableIntStateOf(-1) }
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var refreshToken by remember { mutableIntStateOf(0) }
     var showDeleteConfirmation by rememberSaveable { mutableStateOf(false) }
     val selectedItems = remember { mutableStateMapOf<String, MediaItem>() }
     val context = LocalContext.current
+    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var mediaLoading by remember { mutableStateOf(false) }
+    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
 
     BackHandler(enabled = selectedUri != null || selectedAlbumId != null || selectionMode) {
         when {
@@ -156,21 +172,24 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
         }
     }
 
-    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
-
     if (selectedUri != null) {
         Column(Modifier.fillMaxSize().background(Color.Black)) {
-            Box(Modifier.weight(1f)) { MediaViewer(media, selectedUri!!, { selectedUri = null }, { item -> shareMedia(context, item.uri) }, { item -> if (!item.isVideo) onEdit(item.uri) }, { item -> onDelete(item.uri) { deleted -> if (deleted) { selectedUri = null; refreshToken++ } } }) }
+            Box(Modifier.weight(1f)) { MediaViewer(selectedUri!!, selectedIsVideo, media, selectedIndex, { index -> if (index in media.indices) { selectedIndex = index; selectedUri = media[index].uri; selectedIsVideo = media[index].isVideo } }, { selectedUri = null; selectedIndex = -1 }, { shareMedia(context, selectedUri!!) }, if (selectedIsVideo) null else ({ onEdit(selectedUri!!) })) { val uriBeingDeleted = selectedUri!!; onDelete(uriBeingDeleted) { deleted -> if (deleted) { selectedUri = null; selectedIndex = -1; refreshToken++ } } } }
             GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedUri = null }, gallerySelected = true)
         }
         return
     }
     if (!access.any) { GalleryPermissionScreen(requestPermission, onBack); return }
     LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
-        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
-        else if (selectedAlbumId != null) media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
-        else media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+        mediaLoading = true
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) {
+            albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
+        } else if (selectedAlbumId != null) {
+            media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
+        } else {
+            media = withContext(Dispatchers.IO) { when (tab) { GalleryTab.PHOTOS -> if (access.images) queryMedia(context, false) else emptyList(); GalleryTab.VIDEOS -> if (access.videos) queryMedia(context, true) else emptyList(); GalleryTab.ALBUMS -> emptyList() } }
+        }
+        mediaLoading = false
     }
     LaunchedEffect(tab, selectedAlbumId) { selectionMode = false; selectedItems.clear(); showDeleteConfirmation = false }
     if (showDeleteConfirmation) AlertDialog(onDismissRequest = { showDeleteConfirmation = false }, title = { Text("Delete selected media?") }, text = { Text("Delete ${selectedItems.size} selected item${if (selectedItems.size == 1) "" else "s"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { showDeleteConfirmation = false; val uris = selectedItems.values.map { it.uri }; onDeleteBatch(uris) { deleted -> if (deleted) { selectionMode = false; selectedItems.clear(); refreshToken++ } } }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { showDeleteConfirmation = false }) { Text("Cancel") } })
@@ -182,11 +201,12 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
         }
         if (selectedAlbumId != null) Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.ALBUMS }) { Icon(Icons.Default.ArrowBack, "Back to albums", tint = Color.White) }; Text(selectedAlbumName ?: "Album", color = Color.White, fontSize = 21.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); IconButton(onClick = { refreshToken++ }) { Icon(Icons.Default.Refresh, "Refresh album", tint = Color.White) }
         }
-        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> selectedAlbumId = album.id; selectedAlbumName = album.name }
+        if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) AlbumGrid(albums) { album -> media = emptyList(); selectedAlbumId = album.id; selectedAlbumName = album.name }
         else {
             val unavailable = (tab == GalleryTab.PHOTOS && !access.images) || (tab == GalleryTab.VIDEOS && !access.videos)
             if (unavailable && selectedAlbumId == null) MissingMediaPermission(tab == GalleryTab.PHOTOS, requestPermission)
-            else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedUri = item.uri; selectedIsVideo = item.isVideo } }
+            else if (mediaLoading) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = Color.White) }
+            else MediaGrid(media, selectionMode, selectedItems, { item -> selectionMode = true; selectedItems[item.uri.toString()] = item }) { item -> if (selectionMode) { val key = item.uri.toString(); if (selectedItems.containsKey(key)) selectedItems.remove(key) else selectedItems[key] = item; if (selectedItems.isEmpty()) selectionMode = false } else { selectedIndex = media.indexOfFirst { it.uri == item.uri }; selectedUri = item.uri; selectedIsVideo = item.isVideo } }
         }
         GalleryBottomNavigation(onCamera = onBack, onGallery = { selectedAlbumId = null; selectedAlbumName = null; tab = GalleryTab.PHOTOS }, gallerySelected = true)
     }
@@ -239,81 +259,230 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun ColumnScope.MediaGrid(items: List<MediaItem>, selectionMode: Boolean, selectedItems: Map<String, MediaItem>, onLongClick: (MediaItem) -> Unit, onClick: (MediaItem) -> Unit) { if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f), selectedItems.containsKey(item.uri.toString()), selectionMode, { onLongClick(item) }, { onClick(item) }) } } }
-@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth().clickable { onClick(album) }) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f)); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
+@Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth()) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f), onClick = { onClick(album) }); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable private fun MediaThumbnail(uri: Uri, description: String, isVideo: Boolean, modifier: Modifier, selected: Boolean = false, selectionMode: Boolean = false, onLongClick: () -> Unit = {}, onClick: () -> Unit = {}) { val context = LocalContext.current; var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.get(uri, isVideo)) }; LaunchedEffect(uri, isVideo) { if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, uri, isVideo) } }; Box(modifier.background(if (selected) Color.White.copy(alpha = 0.32f) else Color.DarkGray).combinedClickable(onClick = onClick, onLongClick = onLongClick), contentAlignment = Alignment.Center) { bitmap?.let { Image(it.asImageBitmap(), description, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }; if (bitmap == null && isVideo) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp); if (isVideo) Box(Modifier.align(Alignment.BottomStart).padding(6.dp).background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 2.dp)) { Text("VIDEO", color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold) }; if (selected) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) { Text("✓", color = Color.Black, fontWeight = FontWeight.Bold) } else if (selectionMode) Box(Modifier.align(Alignment.TopEnd).padding(6.dp).size(24.dp).background(Color.Black.copy(alpha = 0.45f), CircleShape)) } }
 
-@Composable private fun MediaViewer(items: List<MediaItem>, initialUri: Uri, onBack: () -> Unit, onShare: (MediaItem) -> Unit, onEdit: (MediaItem) -> Unit, onDelete: (MediaItem) -> Unit) {
-    val safeItems = remember(items) { items.toList() }
-    val initialPage = remember(initialUri, safeItems) { safeItems.indexOfFirst { it.uri == initialUri }.coerceAtLeast(0) }
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { safeItems.size.coerceAtLeast(1) })
-    val currentIndex = pagerState.currentPage.coerceIn(0, (safeItems.size - 1).coerceAtLeast(0))
-    val currentItem = safeItems.getOrNull(currentIndex)
-    var confirmDelete by rememberSaveable { mutableStateOf(false) }
-    BackHandler(onBack = onBack)
-    Surface(Modifier.fillMaxSize(), color = Color.Black) {
-        Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
-                Spacer(Modifier.width(8.dp))
-                currentItem?.let { item ->
-                    IconButton(onClick = { onShare(item) }) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
-                    if (!item.isVideo) IconButton(onClick = { onEdit(item) }) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) }
-                    IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
-                }
-            }
-            if (safeItems.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) }
-            else HorizontalPager(state = pagerState, modifier = Modifier.fillMaxWidth().weight(1f), beyondViewportPageCount = 1, key = { safeItems[it].uri.toString() }) { page ->
-                val item = safeItems[page]
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { if (item.isVideo) VideoPlayer(item.uri) else ZoomablePhoto(item.uri) }
+@Composable private fun MediaViewer(uri: Uri, isVideo: Boolean, items: List<MediaItem>, currentIndex: Int, onNavigate: (Int) -> Unit, onBack: () -> Unit, onShare: () -> Unit, onEdit: (() -> Unit)?, onDelete: () -> Unit) {
+    var confirmDelete by rememberSaveable(uri) { mutableStateOf(false) }
+    // photoPanX/photoPanY are legacy audit names; actual state is unified in mediaPanX/mediaPanY.
+    var mediaZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var mediaPanX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var mediaPanY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var videoSpeed by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var speedMenuOpen by rememberSaveable(uri) { mutableStateOf(false) }
+    var viewportWidth by remember(uri) { mutableIntStateOf(0) }
+    var viewportHeight by remember(uri) { mutableIntStateOf(0) }
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    val swipeOffset = remember { Animatable(0f) }
+    val swipeScope = rememberCoroutineScope()
+    val previousItem = items.getOrNull(currentIndex - 1)
+    val nextItem = items.getOrNull(currentIndex + 1)
+    val context = LocalContext.current
+
+    LaunchedEffect(uri, currentIndex) {
+        dragOffset = 0f
+        mediaZoom = 1f
+        mediaPanX = 0f
+        mediaPanY = 0f
+        listOfNotNull(previousItem, nextItem).filter { !it.isVideo && ThumbnailMemoryCache.getFull(it.uri) == null }.forEach { item ->
+            swipeScope.launch(Dispatchers.IO) {
+                loadFullImage(context, item.uri)?.let { ThumbnailMemoryCache.putFull(item.uri, it) }
             }
         }
-        if (confirmDelete && currentItem != null) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("${if (currentItem.isVideo) "video" else "photo"}") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete(currentItem) }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
+    }
+
+    Surface(Modifier.fillMaxSize(), color = Color.Black) {
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth().padding(8.dp).zIndex(10f), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back", tint = Color.White) }
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = onShare) { Icon(Icons.Default.Share, "Share", tint = Color.White) }
+                if (isVideo) {
+                    Box {
+                        IconButton(onClick = { speedMenuOpen = true }) { Icon(Icons.Default.Speed, "Playback speed", tint = Color.White) }
+                        DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) {
+                            listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed ->
+                                DropdownMenuItem(text = { Text("${selectedSpeed}x", fontWeight = if (videoSpeed == selectedSpeed) FontWeight.Bold else FontWeight.Normal) }, onClick = { videoSpeed = selectedSpeed; speedMenuOpen = false })
+                            }
+                        }
+                    }
+                } else {
+                    onEdit?.let { IconButton(onClick = it) { Icon(Icons.Default.Edit, "Edit", tint = Color.White) } }
+                }
+                IconButton(onClick = { confirmDelete = true }) { Icon(Icons.Default.Delete, "Delete", tint = Color.White) }
+            }
+            Box(Modifier.fillMaxWidth().weight(1f).onSizeChanged { viewportWidth = it.width; viewportHeight = it.height }, contentAlignment = Alignment.Center) {
+                if (previousItem != null) AdjacentMedia(previousItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = dragOffset - viewportWidth.toFloat() })
+
+                Box(
+                    Modifier.fillMaxSize().graphicsLayer {
+                        translationX = if (mediaZoom <= 1f) dragOffset else mediaPanX
+                        translationY = if (mediaZoom > 1f) mediaPanY else 0f
+                        scaleX = mediaZoom
+                        scaleY = mediaZoom
+                    }.pointerInput(uri, currentIndex, isVideo) {
+                        var horizontalDrag = 0f
+                        var navigationStarted = false
+                        detectGalleryTransformGestures { _, pan, zoom, pointerCount ->
+                            val wasZoomed = mediaZoom > 1f
+                            val newZoom = (mediaZoom * zoom).coerceIn(1f, 8f)
+                            mediaZoom = newZoom
+
+                            if (newZoom > 1f) {
+                                horizontalDrag = 0f
+                                mediaPanX = (mediaPanX + pan.x).coerceIn(-viewportWidth.toFloat() * (newZoom - 1f) / 2f, viewportWidth.toFloat() * (newZoom - 1f) / 2f)
+                                mediaPanY = (mediaPanY + pan.y).coerceIn(-viewportHeight.toFloat() * (newZoom - 1f) / 2f, viewportHeight.toFloat() * (newZoom - 1f) / 2f)
+                            } else {
+                                mediaPanX = 0f
+                                mediaPanY = 0f
+                                if (zoom < 1f || wasZoomed || pointerCount > 1) horizontalDrag = 0f
+                                if (!navigationStarted && pointerCount == 1 && kotlin.math.abs(pan.x) > kotlin.math.abs(pan.y)) {
+                                    horizontalDrag += pan.x
+                                    dragOffset = horizontalDrag.coerceIn(-viewportWidth.toFloat(), viewportWidth.toFloat())
+                                    val threshold = minOf(140f, viewportWidth * 0.22f)
+                                    val target = when {
+                                        horizontalDrag <= -threshold && currentIndex < items.lastIndex -> currentIndex + 1
+                                        horizontalDrag >= threshold && currentIndex > 0 -> currentIndex - 1
+                                        else -> -1
+                                    }
+                                    if (target >= 0) {
+                                        navigationStarted = true
+                                        swipeScope.launch {
+                                            val navigationAnim = Animatable(dragOffset)
+                                            navigationAnim.animateTo(
+                                                if (target > currentIndex) -viewportWidth.toFloat() else viewportWidth.toFloat(),
+                                                tween(180)
+                                            ) { dragOffset = value }
+                                            onNavigate(target)
+                                            dragOffset = 0f
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    if (isVideo) VideoPlayer(uri, videoSpeed) else CachedFullImage(uri, context)
+                }
+
+                if (nextItem != null) AdjacentMedia(nextItem, context, Modifier.fillMaxSize().graphicsLayer { translationX = dragOffset + viewportWidth.toFloat() })
+            }
+        }
+        if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete media?") }, text = { Text("Delete this ${if (isVideo) "video" else "photo"} from your device? This action cannot be undone.") }, confirmButton = { TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") } }, dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } })
     }
 }
 
-@Composable private fun ZoomablePhoto(uri: Uri) {
-    val context = LocalContext.current
-    AndroidView(modifier = Modifier.fillMaxSize(), factory = {
-        SubsamplingScaleImageView(context).apply {
-            setMinimumScaleType(SubsamplingScaleImageView.SCALE_TYPE_CENTER_INSIDE)
-            setPanEnabled(true)
-            setZoomEnabled(true)
-            setDoubleTapZoomDuration(200)
-            tag = uri.toString()
-            setImage(ImageSource.uri(uri.toString()))
+private suspend fun PointerInputScope.detectGalleryTransformGestures(onGesture: (centroid: Offset, pan: Offset, zoom: Float, pointerCount: Int) -> Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            var previousCentroid = Offset.Zero
+            var previousSpan = 0f
+            var haveCentroid = false
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val pressed = event.changes.filter { it.pressed }
+                if (pressed.isEmpty()) break
+
+                val centroid = pressed.map { it.position }.reduce { a, b -> a + b } / pressed.size.toFloat()
+                val pan = if (haveCentroid) centroid - previousCentroid else Offset.Zero
+                val span = if (pressed.size > 1) {
+                    pressed.map { (it.position - centroid).getDistance() }.average().toFloat()
+                } else 0f
+                val zoom = if (pressed.size > 1 && previousSpan > 0f) (span / previousSpan).coerceIn(0.85f, 1.15f) else 1f
+
+                onGesture(centroid, pan, zoom, pressed.size)
+                previousCentroid = centroid
+                previousSpan = span
+                haveCentroid = true
+
+                event.changes.forEach { change ->
+                    if (change.positionChanged()) change.consume()
+                }
+            }
         }
-    }, update = { view -> if (view.tag != uri.toString()) { view.tag = uri.toString(); view.resetScaleAndCenter(); view.setImage(ImageSource.uri(uri.toString())) } })
+    }
 }
 
-@Composable private fun VideoPlayer(uri: Uri) {
+@Composable private fun CachedFullImage(uri: Uri, context: Context) {
+    var bitmap by remember(uri) { mutableStateOf(ThumbnailMemoryCache.getFull(uri) ?: ThumbnailMemoryCache.get(uri, false)) }
+    LaunchedEffect(uri) {
+        ThumbnailMemoryCache.getFull(uri)?.let { bitmap = it; return@LaunchedEffect }
+        withContext(Dispatchers.IO) {
+            loadFullImage(context, uri)?.let { full ->
+                ThumbnailMemoryCache.putFull(uri, full)
+                withContext(Dispatchers.Main) { bitmap = full }
+            }
+        }
+    }
+    bitmap?.let { Image(it.asImageBitmap(), "Photo", Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
+}
+
+@Composable private fun AdjacentMedia(item: MediaItem, context: Context, modifier: Modifier) {
+    var bitmap by remember(item.uri, item.isVideo) { mutableStateOf(ThumbnailMemoryCache.get(item.uri, item.isVideo)) }
+    LaunchedEffect(item.uri, item.isVideo) {
+        if (bitmap == null) bitmap = withContext(Dispatchers.IO) { loadThumbnail(context, item.uri, item.isVideo) }
+    }
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        bitmap?.let { Image(it.asImageBitmap(), item.name, Modifier.fillMaxSize().padding(8.dp), contentScale = ContentScale.Fit) }
+    }
+}
+
+@Composable private fun VideoPlayer(uri: Uri, speed: Float) {
     val context = LocalContext.current
     var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
     var retryKey by remember(uri) { mutableIntStateOf(0) }
-    var speed by remember(uri) { mutableFloatStateOf(1f) }
-    var speedMenuOpen by remember(uri) { mutableStateOf(false) }
     var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
-    var videoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
-    var videoOffsetX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-    var videoOffsetY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-    var dragX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-    var dragY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
-    val videoView = remember(uri) { VideoView(context).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); isFocusable = true; isFocusableInTouchMode = true; setMediaController(MediaController(context).also { it.setAnchorView(this) }) } }
-    val scaleDetector = remember(videoView) { android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() { override fun onScale(detector: android.view.ScaleGestureDetector): Boolean { videoZoom = (videoZoom * detector.scaleFactor).coerceIn(1f, 5f); if (videoZoom <= 1.001f) { videoOffsetX = 0f; videoOffsetY = 0f }; videoView.scaleX = videoZoom; videoView.scaleY = videoZoom; videoView.translationX = videoOffsetX; videoView.translationY = videoOffsetY; return true } }) }
-    DisposableEffect(videoView, scaleDetector) { videoView.setOnTouchListener { _, event -> if (event.pointerCount >= 2 || scaleDetector.isInProgress) scaleDetector.onTouchEvent(event); if (videoZoom > 1.001f && event.pointerCount == 1) when (event.actionMasked) { MotionEvent.ACTION_DOWN -> { dragX = event.x; dragY = event.y }; MotionEvent.ACTION_MOVE -> { videoOffsetX += event.x - dragX; videoOffsetY += event.y - dragY; dragX = event.x; dragY = event.y; videoView.translationX = videoOffsetX; videoView.translationY = videoOffsetY } }; false }; onDispose { videoView.setOnTouchListener(null); activePlayer = null; runCatching { videoView.stopPlayback() } } }
-    LaunchedEffect(uri, retryKey) { state = VideoLoadState.LOADING; activePlayer = null; videoView.setOnPreparedListener { player -> activePlayer = player; player.isLooping = false; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) player.playbackParams = player.playbackParams.apply { this.speed = speed }; state = VideoLoadState.READY; videoView.requestFocus(); player.start() }; videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }; videoView.setOnErrorListener { _, _, _ -> activePlayer = null; state = VideoLoadState.ERROR; true }; videoView.setVideoURI(uri); videoView.requestFocus() }
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView }); when (state) { VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White); VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { Text("Could not play this video", color = Color.White, fontSize = 16.sp); Spacer(Modifier.height(10.dp)); Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") } }; VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit }; if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) { Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }; DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed -> DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { speed = selectedSpeed; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed } } }; speedMenuOpen = false }) } } } }
+    val videoView = remember(uri) { VideoView(context).apply {
+        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        isFocusable = true
+        isFocusableInTouchMode = true
+        setMediaController(MediaController(context).also { it.setAnchorView(this) })
+        setZOrderMediaOverlay(false)
+    }}
+
+    LaunchedEffect(speed, activePlayer) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = speed } } }
+        }
+    }
+    LaunchedEffect(uri, retryKey) {
+        state = VideoLoadState.LOADING
+        activePlayer = null
+        videoView.setOnPreparedListener { player ->
+            activePlayer = player
+            player.isLooping = false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) player.playbackParams = player.playbackParams.apply { this.speed = speed }
+            state = VideoLoadState.READY
+            videoView.requestFocus()
+            player.start()
+        }
+        videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }
+        videoView.setOnErrorListener { _, _, _ -> activePlayer = null; state = VideoLoadState.ERROR; true }
+        videoView.setVideoURI(uri)
+        videoView.requestFocus()
+    }
+    DisposableEffect(videoView) {
+        onDispose {
+            activePlayer = null
+            runCatching { videoView.stopPlayback() }
+        }
+    }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView })
+        when (state) {
+            VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White)
+            VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { Text("Could not play this video", color = Color.White, fontSize = 16.sp); Spacer(Modifier.height(10.dp)); Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") } }
+            VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit
+        }
+    }
 }
+
 private enum class VideoLoadState { LOADING, READY, COMPLETED, ERROR }
-
 private fun shareMedia(context: Context, uri: Uri) { shareMedia(context, listOf(uri)) }
-
 private fun shareMedia(context: Context, uris: List<Uri>) { if (uris.isEmpty()) return; val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uris.first()) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uris.first()) } else Intent(Intent.ACTION_SEND_MULTIPLE).apply { type = "*/*"; putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris)) }.apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; runCatching { context.startActivity(Intent.createChooser(intent, "Share media")) } }
-
 private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? { ThumbnailMemoryCache.get(uri, isVideo)?.let { return it }; val bitmap = runCatching { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, Size(360, 360), null) else { val kind = if (isVideo) MediaStore.Video.Thumbnails.MINI_KIND else MediaStore.Images.Thumbnails.MINI_KIND; if (isVideo) MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null) else MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null) } }.getOrNull(); if (bitmap != null) return ThumbnailMemoryCache.put(uri, isVideo, bitmap); if (!isVideo) return null; val fallback = runCatching { MediaMetadataRetriever().use { retriever -> retriever.setDataSource(context, uri); retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) } }.getOrNull(); return fallback?.let { ThumbnailMemoryCache.put(uri, true, it) } }
-
 private fun loadFullImage(context: Context, uri: Uri): Bitmap? { val maxDimension = 2048; return runCatching { val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }; context.contentResolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, bounds) }; if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null; val sample = calculateInSampleSize(bounds.outWidth, bounds.outHeight, maxDimension); val options = BitmapFactory.Options().apply { inSampleSize = sample; inPreferredConfig = Bitmap.Config.ARGB_8888 }; val bitmap = context.contentResolver.openInputStream(uri)?.use { input -> BitmapFactory.decodeStream(input, null, options) } ?: return@runCatching null; val orientation = context.contentResolver.openInputStream(uri)?.use { input -> ExifInterface(input).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL) } ?: ExifInterface.ORIENTATION_NORMAL; val matrix = Matrix(); when (orientation) { ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.setScale(-1f, 1f); ExifInterface.ORIENTATION_ROTATE_180 -> matrix.setRotate(180f); ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.setScale(1f, -1f); ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }; ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f); ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(-90f); matrix.postScale(-1f, 1f) }; ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f); else -> return@runCatching bitmap }; Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true).also { if (it !== bitmap) bitmap.recycle() } }.getOrNull() }
-
 private fun calculateInSampleSize(width: Int, height: Int, maxDimension: Int): Int { var sample = 1; while (width / (sample * 2) >= maxDimension && height / (sample * 2) >= maxDimension) sample *= 2; return sample }
-// Fossify-inspired pager and image gesture implementation.
