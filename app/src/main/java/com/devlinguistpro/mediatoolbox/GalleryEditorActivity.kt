@@ -205,9 +205,9 @@ private fun GalleryEditor(
                         factory = {
                             CropImageView(context).apply {
                                 setImageBitmap(preview)
-                                setGuidelines(CropImageView.Guidelines.ON)
-                                setAutoZoomEnabled(true)
-                                setMaxZoom(4)
+                                guidelines = CropImageView.Guidelines.ON
+                                isAutoZoomEnabled = true
+                                maxZoom = 4
                             }
                         },
                         update = { view ->

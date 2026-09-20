@@ -351,6 +351,34 @@ private fun ZoomablePhoto(uri: Uri) {
     )
 }
 
+@Composable
+private fun VideoPlayer(uri: Uri, speed: Float) {
+    val context = LocalContext.current
+    var zoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    AndroidView(
+        modifier = Modifier.fillMaxSize(),
+        factory = {
+            VideoView(context).apply {
+                setVideoURI(uri)
+                setMediaController(MediaController(context).also { it.setAnchorView(this) })
+                setOnPreparedListener { it.isLooping = false; it.setPlaybackSpeed(speed) }
+                start()
+                setOnTouchListener { view, event ->
+                    if (event.pointerCount >= 2) {
+                        val detector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+                            override fun onScale(d: ScaleGestureDetector): Boolean {
+                                zoom = (zoom * d.scaleFactor).coerceIn(1f, 5f); return true
+                            }
+                        })
+                        detector.onTouchEvent(event); true
+                    } else false
+                }
+            }
+        },
+        update = { it.setPlaybackSpeed(speed) }
+    )
+}
+
 private fun shareMedia(context: Context, uri: Uri) { shareMedia(context, listOf(uri)) }
 private fun shareMedia(context: Context, uris: List<Uri>) { if (uris.isEmpty()) return; val intent = if (uris.size == 1) Intent(Intent.ACTION_SEND).apply { type = context.contentResolver.getType(uris.first()) ?: "*/*"; putExtra(Intent.EXTRA_STREAM, uris.first()) } else Intent(Intent.ACTION_SEND_MULTIPLE).apply { type = "*/*"; putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris)) }.apply { addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }; runCatching { context.startActivity(Intent.createChooser(intent, "Share media")) } }
 private fun loadThumbnail(context: Context, uri: Uri, isVideo: Boolean): Bitmap? { ThumbnailMemoryCache.get(uri, isVideo)?.let { return it }; val bitmap = runCatching { if (Build.VERSION.SDK_INT >= 29) context.contentResolver.loadThumbnail(uri, Size(360, 360), null) else { val kind = if (isVideo) MediaStore.Video.Thumbnails.MINI_KIND else MediaStore.Images.Thumbnails.MINI_KIND; if (isVideo) MediaStore.Video.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null) else MediaStore.Images.Thumbnails.getThumbnail(context.contentResolver, ContentUris.parseId(uri), kind, null) } }.getOrNull(); if (bitmap != null) return ThumbnailMemoryCache.put(uri, isVideo, bitmap); if (!isVideo) return null; val fallback = runCatching { MediaMetadataRetriever().use { retriever -> retriever.setDataSource(context, uri); retriever.getFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) } }.getOrNull(); return fallback?.let { ThumbnailMemoryCache.put(uri, true, it) } }

@@ -456,7 +456,7 @@ private fun ScannerPreview(
                 Icon(Icons.Default.Folder, "PDF folder", tint = ComposeColor.White); Spacer(Modifier.size(8.dp)); Text(folderName, color = ComposeColor.White, maxLines = 1, modifier = Modifier.weight(1f)); Button(onClick = onChooseFolder) { Text("Choose") }
             }
             Spacer(Modifier.height(10.dp)); Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) { Icon(Icons.Default.PictureAsPdf, "Save PDF"); Spacer(Modifier.size(8.dp)); Text("Save PDF") }
-            Spacer(Modifier.height(8.dp)); ScannerBottomNavigation(pageCount = pages.size, onMore = onMore, onCamera = onOpenCamera, onPages = { if (pages.isNotEmpty()) onBackToScanner() })
+            Spacer(Modifier.height(8.dp)); ScannerBottomNavigation(pageCount = pages.size, onMore = onMore, onCamera = onOpenCamera, onPages = { if (pages.isNotEmpty()) onFinish() })
         }
     }
 }
