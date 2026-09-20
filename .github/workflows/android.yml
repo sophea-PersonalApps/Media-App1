@@ -43,8 +43,8 @@ jobs:
           text = Path("app/src/main/java/com/devlinguistpro/mediatoolbox/ScannerActivity.kt").read_text(encoding="utf-8")
           required = [
               "private fun decodePreview(path: String): Bitmap?",
-              "CameraSectionControls(",
-              "CameraSectionBottomNavigation(",
+              "CameraModeStrip(",
+              "ScannerBottomNavigation(",
               "startActivity(Intent(this, MainActivity::class.java)",
               "startActivity(Intent(this, GalleryActivity::class.java))",
               "startActivity(Intent(this, QrScannerActivity::class.java))",
