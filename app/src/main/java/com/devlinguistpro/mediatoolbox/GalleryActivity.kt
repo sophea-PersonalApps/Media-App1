@@ -351,32 +351,23 @@ private fun ZoomablePhoto(uri: Uri) {
     )
 }
 
-@Composable
-private fun VideoPlayer(uri: Uri, speed: Float) {
+@Composable private fun VideoPlayer(uri: Uri) {
     val context = LocalContext.current
-    var zoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
-    AndroidView(
-        modifier = Modifier.fillMaxSize(),
-        factory = {
-            VideoView(context).apply {
-                setVideoURI(uri)
-                setMediaController(MediaController(context).also { it.setAnchorView(this) })
-                setOnPreparedListener { it.isLooping = false; it.setPlaybackSpeed(speed) }
-                start()
-                setOnTouchListener { view, event ->
-                    if (event.pointerCount >= 2) {
-                        val detector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-                            override fun onScale(d: ScaleGestureDetector): Boolean {
-                                zoom = (zoom * d.scaleFactor).coerceIn(1f, 5f); return true
-                            }
-                        })
-                        detector.onTouchEvent(event); true
-                    } else false
-                }
-            }
-        },
-        update = { it.setPlaybackSpeed(speed) }
-    )
+    var state by remember(uri) { mutableStateOf(VideoLoadState.LOADING) }
+    var retryKey by remember(uri) { mutableIntStateOf(0) }
+    var speed by remember(uri) { mutableFloatStateOf(1f) }
+    var speedMenuOpen by remember(uri) { mutableStateOf(false) }
+    var activePlayer by remember(uri) { mutableStateOf<MediaPlayer?>(null) }
+    var videoZoom by rememberSaveable(uri) { mutableFloatStateOf(1f) }
+    var videoOffsetX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var videoOffsetY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var dragX by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    var dragY by rememberSaveable(uri) { mutableFloatStateOf(0f) }
+    val videoView = remember(uri) { VideoView(context).apply { layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT); isFocusable = true; isFocusableInTouchMode = true; setMediaController(MediaController(context).also { it.setAnchorView(this) }) } }
+    val scaleDetector = remember(videoView) { android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() { override fun onScale(detector: android.view.ScaleGestureDetector): Boolean { videoZoom = (videoZoom * detector.scaleFactor).coerceIn(1f, 5f); if (videoZoom <= 1.001f) { videoOffsetX = 0f; videoOffsetY = 0f }; videoView.scaleX = videoZoom; videoView.scaleY = videoZoom; videoView.translationX = videoOffsetX; videoView.translationY = videoOffsetY; return true } }) }
+    DisposableEffect(videoView, scaleDetector) { videoView.setOnTouchListener { _, event -> if (event.pointerCount >= 2 || scaleDetector.isInProgress) scaleDetector.onTouchEvent(event); if (videoZoom > 1.001f && event.pointerCount == 1) when (event.actionMasked) { MotionEvent.ACTION_DOWN -> { dragX = event.x; dragY = event.y }; MotionEvent.ACTION_MOVE -> { videoOffsetX += event.x - dragX; videoOffsetY += event.y - dragY; dragX = event.x; dragY = event.y; videoView.translationX = videoOffsetX; videoView.translationY = videoOffsetY } }; false }; onDispose { videoView.setOnTouchListener(null); activePlayer = null; runCatching { videoView.stopPlayback() } } }
+    LaunchedEffect(uri, retryKey) { state = VideoLoadState.LOADING; activePlayer = null; videoView.setOnPreparedListener { player -> activePlayer = player; player.isLooping = false; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) player.playbackParams = player.playbackParams.apply { this.speed = speed }; state = VideoLoadState.READY; videoView.requestFocus(); player.start() }; videoView.setOnCompletionListener { state = VideoLoadState.COMPLETED }; videoView.setOnErrorListener { _, _, _ -> activePlayer = null; state = VideoLoadState.ERROR; true }; videoView.setVideoURI(uri); videoView.requestFocus() }
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { AndroidView(modifier = Modifier.fillMaxSize(), factory = { videoView }); when (state) { VideoLoadState.LOADING -> CircularProgressIndicator(color = Color.White); VideoLoadState.ERROR -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) { Text("Could not play this video", color = Color.White, fontSize = 16.sp); Spacer(Modifier.height(10.dp)); Button(onClick = { retryKey++ }) { Icon(Icons.Default.Refresh, "Retry"); Spacer(Modifier.size(5.dp)); Text("Retry") } }; VideoLoadState.READY, VideoLoadState.COMPLETED -> Unit }; if (state == VideoLoadState.READY || state == VideoLoadState.COMPLETED) Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) { Button(onClick = { speedMenuOpen = true }) { Text("${speed}x") }; DropdownMenu(expanded = speedMenuOpen, onDismissRequest = { speedMenuOpen = false }) { listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f).forEach { selectedSpeed -> DropdownMenuItem(text = { Text("${selectedSpeed}x") }, onClick = { speed = selectedSpeed; if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) activePlayer?.let { player -> runCatching { player.playbackParams = player.playbackParams.apply { this.speed = selectedSpeed } } }; speedMenuOpen = false }) } } } }
 }
 
 private fun shareMedia(context: Context, uri: Uri) { shareMedia(context, listOf(uri)) }

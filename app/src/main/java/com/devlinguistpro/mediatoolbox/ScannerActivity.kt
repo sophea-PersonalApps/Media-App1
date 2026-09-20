@@ -408,20 +408,6 @@ private fun ScannerCapture(
                 IconButton(onClick = onFlip) { Icon(Icons.Default.FlipCameraAndroid, "Flip camera", tint = ComposeColor.White) }
             }
             Column(Modifier.fillMaxWidth().background(ComposeColor.Black.copy(alpha = 0.82f)).navigationBarsPadding().padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                if (pages.isNotEmpty()) {
-                    LazyRow(Modifier.fillMaxWidth().height(72.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        itemsIndexed(pages) { index, path ->
-                            Box(Modifier.size(68.dp)) { LocalImage(path, Modifier.fillMaxSize()); IconButton(onClick = { onDelete(index) }, modifier = Modifier.align(Alignment.TopEnd).size(25.dp)) { Icon(Icons.Default.Delete, "Remove page", tint = ComposeColor.White) } }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
-                    Text("${pages.size} page${if (pages.size == 1) "" else "s"}", color = ComposeColor.White, modifier = Modifier.padding(end = 18.dp))
-                    Box(Modifier.size(72.dp).background(ComposeColor.White, CircleShape).padding(5.dp).clickable(onClick = onCapture), contentAlignment = Alignment.Center) { Box(Modifier.size(58.dp).background(ComposeColor.Black, CircleShape)) }
-                    Spacer(Modifier.size(18.dp)); Button(onClick = onFinish, enabled = pages.isNotEmpty()) { Text("Finish") }
-                }
-                Spacer(Modifier.height(8.dp))
                 CameraModeStrip(
                     selected = CameraSectionMode.SCAN,
                     onModeSelected = { scannerModeAction(context, it) }
@@ -429,7 +415,7 @@ private fun ScannerCapture(
                 ScannerBottomNavigation(
                     pageCount = pages.size,
                     onMore = onMore,
-                    onCamera = onOpenCamera,
+                    onCapture = onCapture,
                     onPages = { if (pages.isNotEmpty()) onFinish() }
                 )
             }
