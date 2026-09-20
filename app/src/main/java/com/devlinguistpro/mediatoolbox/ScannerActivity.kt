@@ -369,7 +369,7 @@ private fun ScannerApp(
     Surface(Modifier.fillMaxSize(), color = ComposeColor.Black) {
         when {
             !hasCameraPermission -> ScannerPermission(onRequestPermission, onBack)
-            showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave, onOpenCamera, onOpenGallery, onOpenQr)
+            showingPreview -> ScannerPreview(pages, onBackToScanner, onDeletePage, folderName, onChooseFolder, onSave, onOpenCamera, onOpenGallery, onOpenQr, onMore)
             else -> ScannerCapture(pages, detectedQuad, onPreviewReady, onCapture, onDeletePage, onFinish, onBack, onFlip, onOpenCamera, onOpenVideo, onOpenGallery, onOpenQr, onMore)
         }
     }
@@ -415,7 +415,7 @@ private fun ScannerCapture(
                 ScannerBottomNavigation(
                     pageCount = pages.size,
                     onMore = onMore,
-                    onCapture = onCapture,
+                    onCamera = onCapture,
                     onPages = { if (pages.isNotEmpty()) onFinish() }
                 )
             }
@@ -426,7 +426,7 @@ private fun ScannerCapture(
 @Composable
 private fun ScannerPreview(
     pages: List<String>, onBack: () -> Unit, onDelete: (Int) -> Unit, folderName: String, onChooseFolder: () -> Unit, onSave: () -> Unit,
-    onOpenCamera: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit
+    onOpenCamera: () -> Unit, onOpenGallery: () -> Unit, onOpenQr: () -> Unit, onMore: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().background(ComposeColor.Black).statusBarsPadding().navigationBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -442,7 +442,7 @@ private fun ScannerPreview(
                 Icon(Icons.Default.Folder, "PDF folder", tint = ComposeColor.White); Spacer(Modifier.size(8.dp)); Text(folderName, color = ComposeColor.White, maxLines = 1, modifier = Modifier.weight(1f)); Button(onClick = onChooseFolder) { Text("Choose") }
             }
             Spacer(Modifier.height(10.dp)); Button(onClick = onSave, modifier = Modifier.fillMaxWidth(), enabled = pages.isNotEmpty()) { Icon(Icons.Default.PictureAsPdf, "Save PDF"); Spacer(Modifier.size(8.dp)); Text("Save PDF") }
-            Spacer(Modifier.height(8.dp)); ScannerBottomNavigation(pageCount = pages.size, onMore = onMore, onCamera = onOpenCamera, onPages = { if (pages.isNotEmpty()) onFinish() })
+            Spacer(Modifier.height(8.dp)); ScannerBottomNavigation(pageCount = pages.size, onMore = onMore, onCamera = onOpenCamera, onPages = { onBackToScanner() })
         }
     }
 }
