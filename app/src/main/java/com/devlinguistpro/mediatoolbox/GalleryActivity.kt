@@ -156,6 +156,9 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
         }
     }
 
+    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
+    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
+
     if (selectedUri != null) {
         Column(Modifier.fillMaxSize().background(Color.Black)) {
             Box(Modifier.weight(1f)) { MediaViewer(media, selectedUri!!, { selectedUri = null }, { item -> shareMedia(context, item.uri) }, { item -> if (!item.isVideo) onEdit(item.uri) }, { item -> onDelete(item.uri) { deleted -> if (deleted) { selectedUri = null; refreshToken++ } } }) }
@@ -164,8 +167,6 @@ private fun GalleryApp(access: MediaAccess, requestPermission: () -> Unit, onBac
         return
     }
     if (!access.any) { GalleryPermissionScreen(requestPermission, onBack); return }
-    var media by remember { mutableStateOf<List<MediaItem>>(emptyList()) }
-    var albums by remember { mutableStateOf<List<Album>>(emptyList()) }
     LaunchedEffect(tab, selectedAlbumId, refreshToken, access) {
         if (tab == GalleryTab.ALBUMS && selectedAlbumId == null) albums = withContext(Dispatchers.IO) { queryAlbums(context, access) }
         else if (selectedAlbumId != null) media = withContext(Dispatchers.IO) { queryAlbumMedia(context, selectedAlbumId!!, access) }
@@ -237,7 +238,7 @@ private fun mediaCollection(videosOnly: Boolean): Uri = if (Build.VERSION.SDK_IN
 @Composable private fun ColumnScope.MissingMediaPermission(photos: Boolean, requestPermission: () -> Unit) { Column(Modifier.fillMaxWidth().weight(1f).padding(28.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) { Text(if (photos) "Photo access is not enabled" else "Video access is not enabled", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold); Spacer(Modifier.height(12.dp)); Button(onClick = requestPermission) { Text("Change media access") } } }
 
 @OptIn(ExperimentalFoundationApi::class)
-@Composable private fun MediaGrid(items: List<MediaItem>, selectionMode: Boolean, selectedItems: Map<String, MediaItem>, onLongClick: (MediaItem) -> Unit, onClick: (MediaItem) -> Unit) { if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f), selectedItems.containsKey(item.uri.toString()), selectionMode, { onLongClick(item) }, { onClick(item) }) } } }
+@Composable private fun ColumnScope.MediaGrid(items: List<MediaItem>, selectionMode: Boolean, selectedItems: Map<String, MediaItem>, onLongClick: (MediaItem) -> Unit, onClick: (MediaItem) -> Unit) { if (items.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No media found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 105.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { items(items, key = { it.uri.toString() }) { item -> MediaThumbnail(item.uri, item.name, item.isVideo, Modifier.aspectRatio(1f), selectedItems.containsKey(item.uri.toString()), selectionMode, { onLongClick(item) }, { onClick(item) }) } } }
 @Composable private fun ColumnScope.AlbumGrid(albums: List<Album>, onClick: (Album) -> Unit) { if (albums.isEmpty()) Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { Text("No albums found", color = Color.LightGray) } else LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) { items(albums, key = { it.id }) { album -> Column(Modifier.fillMaxWidth().clickable { onClick(album) }) { MediaThumbnail(album.coverUri, album.name, album.coverIsVideo, Modifier.fillMaxWidth().aspectRatio(1f)); Spacer(Modifier.height(4.dp)); Text(album.name, color = Color.White, maxLines = 1); Text("${album.count} items", color = Color.LightGray, fontSize = 12.sp) } } } }
 
 @OptIn(ExperimentalFoundationApi::class)
