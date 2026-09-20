@@ -24,12 +24,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Crop
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.RotateLeft
 import androidx.compose.material.icons.filled.RotateRight
@@ -54,6 +56,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import com.canhub.cropper.CropImageView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -76,14 +80,14 @@ class GalleryEditorActivity : ComponentActivity() {
         setContent { MaterialTheme { GalleryEditor(uri, ::saveEdited, ::finish) } }
     }
 
-    private fun saveEdited(sourceUri: Uri, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean) {
+    private fun saveEdited(sourceUri: Uri, baseBitmap: Bitmap?, brightness: Float, contrast: Float, saturation: Float, rotation: Float, flipHorizontal: Boolean, flipVertical: Boolean) {
         if (!saving.compareAndSet(false, true)) return
         Thread {
             var outputUri: Uri? = null
             var source: Bitmap? = null
             var edited: Bitmap? = null
             try {
-                source = decodeUriScaled(contentResolver, sourceUri, 4096) ?: throw IOException("Could not read source photo")
+                source = baseBitmap?.copy(Bitmap.Config.ARGB_8888, true) ?: decodeUriScaled(contentResolver, sourceUri, 4096) ?: throw IOException("Could not read source photo")
                 edited = editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
                 val values = ContentValues().apply {
                     put(MediaStore.Images.Media.DISPLAY_NAME, "Edited_${System.currentTimeMillis()}.jpg")
@@ -117,11 +121,17 @@ class GalleryEditorActivity : ComponentActivity() {
 }
 
 @Composable
-private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Boolean, Boolean) -> Unit, onCancel: () -> Unit) {
+private fun GalleryEditor(
+    uri: Uri,
+    onSave: (Uri, Bitmap?, Float, Float, Float, Float, Boolean, Boolean) -> Unit,
+    onCancel: () -> Unit
+) {
     val context = LocalContext.current
     var originalPreview by remember { mutableStateOf<Bitmap?>(null) }
+    var croppedBase by remember { mutableStateOf<Bitmap?>(null) }
     var preview by remember { mutableStateOf<Bitmap?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var cropMode by remember { mutableStateOf(false) }
     var brightness by remember { mutableFloatStateOf(0f) }
     var contrast by remember { mutableFloatStateOf(1f) }
     var saturation by remember { mutableFloatStateOf(1f) }
@@ -132,25 +142,85 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
     LaunchedEffect(uri) {
         loading = true
         originalPreview?.let { if (!it.isRecycled) it.recycle() }
+        croppedBase?.let { if (!it.isRecycled) it.recycle() }
         preview?.let { if (!it.isRecycled) it.recycle() }
         originalPreview = null
+        croppedBase = null
         preview = null
-        originalPreview = withContext(Dispatchers.IO) { runCatching { decodeUriScaled(context.contentResolver, uri, 1600) }.getOrNull() }
+        originalPreview = withContext(Dispatchers.IO) {
+            runCatching { decodeUriScaled(context.contentResolver, uri, 1600) }.getOrNull()
+        }
         loading = false
     }
 
-    LaunchedEffect(originalPreview, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) {
-        val source = originalPreview ?: return@LaunchedEffect
-        val generated = withContext(Dispatchers.Default) { runCatching { editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }.getOrNull() }
-        preview?.let { old -> if (!old.isRecycled && old !== generated) old.recycle() }
+    LaunchedEffect(originalPreview, croppedBase, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) {
+        val source = croppedBase ?: originalPreview ?: return@LaunchedEffect
+        val generated = withContext(Dispatchers.Default) {
+            runCatching {
+                editBitmap(source, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
+            }.getOrNull()
+        }
+        preview?.let { old -> if (!old.isRecycled && old !== generated && old !== croppedBase) old.recycle() }
         preview = generated
     }
 
     DisposableEffect(Unit) {
         onDispose {
             originalPreview?.let { if (!it.isRecycled) it.recycle() }
+            croppedBase?.let { if (!it.isRecycled) it.recycle() }
             preview?.let { if (!it.isRecycled) it.recycle() }
         }
+    }
+
+    if (cropMode) {
+        Surface(Modifier.fillMaxSize(), color = Color.Black) {
+            Column(Modifier.fillMaxSize().padding(12.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { cropMode = false }) {
+                        Icon(Icons.Default.Close, "Cancel crop", tint = Color.White)
+                    }
+                    Text("Crop", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                    Button(onClick = {
+                        val cropSource = preview
+                        if (cropSource != null) {
+                            val result = cropSource.copy(Bitmap.Config.ARGB_8888, true)
+                            croppedBase?.let { if (!it.isRecycled) it.recycle() }
+                            preview = result
+                            croppedBase = result.copy(Bitmap.Config.ARGB_8888, true)
+                            brightness = 0f
+                            contrast = 1f
+                            saturation = 1f
+                            rotation = 0f
+                            flipHorizontal = false
+                            flipVertical = false
+                        }
+                        cropMode = false
+                    }, enabled = preview != null) {
+                        Text("Apply")
+                    }
+                }
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    AndroidView(
+                        modifier = Modifier.fillMaxSize(),
+                        factory = {
+                            CropImageView(context).apply {
+                                setImageBitmap(preview)
+                                setGuidelines(CropImageView.Guidelines.ON)
+                                setAutoZoomEnabled(true)
+                                setMaxZoom(4)
+                            }
+                        },
+                        update = { view ->
+                            if (view.tag !== preview && preview != null) {
+                                view.tag = preview
+                                view.setImageBitmap(preview)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+        return
     }
 
     Surface(Modifier.fillMaxSize(), color = Color.Black) {
@@ -158,8 +228,18 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onCancel) { Icon(Icons.Default.Close, "Cancel", tint = Color.White) }
                 Text("Edit", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Button(onClick = { onSave(uri, brightness, contrast, saturation, rotation, flipHorizontal, flipVertical) }, enabled = !loading && preview != null) {
-                    Icon(Icons.Default.Check, "Save"); Spacer(Modifier.size(5.dp)); Text("Save")
+                IconButton(onClick = { if (preview != null) cropMode = true }, enabled = preview != null) {
+                    Icon(Icons.Default.Crop, "Crop", tint = Color.White)
+                }
+                Button(
+                    onClick = {
+                        onSave(uri, croppedBase?.copy(Bitmap.Config.ARGB_8888, true), brightness, contrast, saturation, rotation, flipHorizontal, flipVertical)
+                    },
+                    enabled = !loading && preview != null
+                ) {
+                    Icon(Icons.Default.Check, "Save")
+                    Spacer(Modifier.size(5.dp))
+                    Text("Save")
                 }
             }
             Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
@@ -183,7 +263,17 @@ private fun GalleryEditor(uri: Uri, onSave: (Uri, Float, Float, Float, Float, Bo
                     Button(onClick = { flipVertical = !flipVertical }) { Icon(Icons.Default.Flip, "Flip vertical"); Spacer(Modifier.size(4.dp)); Text("V") }
                 }
                 Spacer(Modifier.height(6.dp))
-                Button(onClick = { brightness = 0f; contrast = 1f; saturation = 1f; rotation = 0f; flipHorizontal = false; flipVertical = false }, modifier = Modifier.fillMaxWidth()) { Text("Reset edits") }
+                Button(
+                    onClick = {
+                        brightness = 0f
+                        contrast = 1f
+                        saturation = 1f
+                        rotation = 0f
+                        flipHorizontal = false
+                        flipVertical = false
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Reset edits") }
             }
         }
     }
